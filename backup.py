@@ -37,7 +37,7 @@ class AtlassianCloudBackup:
     def _get_download_url(self, task_id):
         url = f'{self.jira_url}{self.BACKUP_DOWNLOAD}{task_id}'
         response = self._get_json_response(url)
-        return f'{self.jira_url}/plugins/servlet/{response.get('result')}'
+        return f'{self.jira_url}/plugins/servlet/{response.get("result")}'
     
     def wait_for_backup_to_complete(self, task_id):
         while True:
