@@ -364,20 +364,45 @@ class BackupController:
             time.sleep(POLL_INTERVAL)
 
     def orchestrate(self):
+        """Main controller method to coordinate backup operations."""
         status = self.load_status()
         now = datetime.now(timezone.utc)
         updated = {}
 
-        # Log last backups in local timezone
+        # Log last backup times in local timezone
+        self._log_last_backup_times(status)
+
+        # Process Jira backup
+        jira_updated = self._handle_jira_backup(status, now)
+        updated.update(jira_updated)
+
+        # Process Confluence backup
+        confluence_updated = self._handle_confluence_backup()
+        updated.update(confluence_updated)
+
+        # Save updates
+        if updated:
+            merged = {**status, **updated}
+            self.save_status(merged)
+
+    def _log_last_backup_times(self, status):
+        """Log the last backup times in local timezone."""
         last_jira = status.get('last_jira_backup')
         if last_jira:
             local_jira = last_jira.astimezone()
-            logging.info('Last Jira backup was at %s (local time)', local_jira.strftime(DATETIME_FORMAT))
+            logging.info('Last Jira backup was at %s (local time)', 
+                         local_jira.strftime(DATETIME_FORMAT))
+        
         last_conf = status.get('last_confluence_backup')
         if last_conf:
             local_conf = last_conf.astimezone()
-            logging.info('Last Confluence backup was at %s (local time)', local_conf.strftime(DATETIME_FORMAT))
+            logging.info('Last Confluence backup was at %s (local time)', 
+                         local_conf.strftime(DATETIME_FORMAT))
 
+    def _handle_jira_backup(self, status, now):
+        """Handle Jira backup process and return updated status."""
+        updated = {}
+        
         # Fetch and compare Jira task IDs
         server_task_id = self.fetch_last_jira_task_id()
         local_task_id = status.get('jira_task_id')
@@ -387,90 +412,118 @@ class BackupController:
         if server_task_id is not None and server_task_id == local_task_id and local_file:
             logging.info('Jira task ID %d already processed in previous run. Skipping Jira backup for %s', 
                         server_task_id, self.url)
-            used_existing = True
-        else:
-            if server_task_id != local_task_id:
-                logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
-            last_task_id = server_task_id
+            return updated
             
-            # Jira backup logic
-            used_existing = False
-            if last_task_id:  # This will now skip the block if last_task_id is None
-                task_info = self.fetch_jira_task_info(last_task_id)
-                submitted_ms = task_info.get('submitted')
-                if submitted_ms:
-                    # Convert milliseconds timestamp to datetime
-                    created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
-                    # Create string representation of the timestamp in local system timezone
-                    created_str = created.astimezone().strftime(DATETIME_FORMAT)
-                else:
-                    # Error on missing timestamp instead of falling back
-                    logging.error('Missing "submitted" timestamp in Jira task %d response: %s', last_task_id, task_info)
-                    sys.exit(1)
-                if now - created <= timedelta(hours=24):
-                    logging.info('Reusing Jira task %d from %s (local time %s)', last_task_id, created_str, created.astimezone().strftime(DATETIME_FORMAT))
-                    if self.wait_for_jira_completion(last_task_id):
-                        filename = self.download_jira_file(last_task_id)
-                        updated['last_jira_backup'] = created
-                        updated['jira_task_id'] = last_task_id
-                        updated['jira_file'] = filename
-                        used_existing = True
-                else:
-                    logging.info('Existing Jira task %d is older than 24 h (%s), triggering new.', last_task_id, created_str)
-            if not used_existing:
-                new_task_id = self.trigger_jira_backup()
-                if self.wait_for_jira_completion(new_task_id):
-                    filename = self.download_jira_file(new_task_id)
-                    updated['last_jira_backup'] = now
-                    updated['jira_task_id'] = new_task_id
-                    updated['jira_file'] = filename
+        if server_task_id != local_task_id:
+            logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
+        
+        # Try to use existing task if it's recent enough
+        if server_task_id:
+            updated.update(self._check_existing_jira_task(server_task_id, now))
+            
+        # Create new backup if needed
+        if not updated:
+            updated.update(self._create_new_jira_backup(now))
+            
+        return updated
 
-        # Confluence backup
-        # Check existing backup status first
+    def _check_existing_jira_task(self, task_id, now):
+        """Check if existing Jira task can be used and process it."""
+        updated = {}
+        task_info = self.fetch_jira_task_info(task_id)
+        submitted_ms = task_info.get('submitted')
+        
+        if not submitted_ms:
+            logging.error('Missing "submitted" timestamp in Jira task %d response: %s', task_id, task_info)
+            raise ValueError(f'Missing "submitted" timestamp in Jira task {task_id} response: {task_info}')
+            
+        # Convert milliseconds timestamp to datetime
+        created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
+        created_str = created.astimezone().strftime(DATETIME_FORMAT)
+        
+        if now - created <= timedelta(hours=24):
+            logging.info('Reusing Jira task %d from %s (local time %s)', 
+                         task_id, created_str, created.astimezone().strftime(DATETIME_FORMAT))
+            if self.wait_for_jira_completion(task_id):
+                filename = self.download_jira_file(task_id)
+                updated['last_jira_backup'] = created
+                updated['jira_task_id'] = task_id
+                updated['jira_file'] = filename
+        else:
+            logging.info('Existing Jira task %d is older than 24 h (%s), triggering new.', 
+                         task_id, created_str)
+                         
+        return updated
+
+    def _create_new_jira_backup(self, now):
+        """Create a new Jira backup and return updated status."""
+        updated = {}
+        new_task_id = self.trigger_jira_backup()
+        if self.wait_for_jira_completion(new_task_id):
+            filename = self.download_jira_file(new_task_id)
+            updated['last_jira_backup'] = now
+            updated['jira_task_id'] = new_task_id
+            updated['jira_file'] = filename
+        return updated
+
+    def _handle_confluence_backup(self):
+        """Handle Confluence backup process and return updated status."""
+        updated = {}
         conf_status = self.get_confluence_backup_status()
 
-        # Skip Confluence backup if not available (conf_status is None)
         if conf_status is None:
             logging.info('Skipping Confluence backup for %s', self.url)
-        else:
-            conf_time = conf_status.get('time')
+            return updated
+        
+        if self._can_use_existing_confluence_backup(conf_status, now):
+            return self._use_existing_confluence_backup(conf_status)
+        
+        return self._create_new_confluence_backup(now)
+
+    def _can_use_existing_confluence_backup(self, conf_status, now):
+        """Check if an existing Confluence backup can be used."""
+        conf_time = conf_status.get('time')
+        if not conf_time:
+            return False
+
+        try:
+            conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
+            one_week_ago = now - timedelta(days=7)
             is_outdated = conf_status.get('isOutdated', True)
+            
+            return not is_outdated and conf_timestamp > one_week_ago and conf_status.get('currentStatus') == 'COMPLETE'
+        except (ValueError, TypeError):
+            logging.warning('Invalid timestamp in Confluence backup status: %s', conf_time)
+            return False
 
-            if conf_time:
-                # Convert timestamp to datetime if present
-                try:
-                    conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
-                    one_week_ago = now - timedelta(days=7)
-                    
-                    if not is_outdated and conf_timestamp > one_week_ago:
-                        # Existing backup is recent enough
-                        logging.info('Using existing Confluence backup from %s', 
-                                    conf_timestamp.astimezone().strftime(DATETIME_FORMAT))
-                        
-                        # If backup is complete, download it
-                        if conf_status.get('currentStatus') == 'COMPLETE':
-                            conf_file = self.wait_for_confluence_file()
-                            if conf_file:
-                                updated['last_confluence_backup'] = conf_timestamp
-                                updated['confluence_file'] = conf_file
-                                
-                            logging.info('Downloaded existing Confluence backup')
-                except (ValueError, TypeError):
-                    logging.warning('Invalid timestamp in Confluence backup status: %s', conf_time)
+    def _use_existing_confluence_backup(self, conf_status):
+        """Use and download an existing Confluence backup."""
+        updated = {}
+        conf_time = conf_status.get('time')
+        conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
+        
+        logging.info('Using existing Confluence backup from %s', 
+                    conf_timestamp.astimezone().strftime(DATETIME_FORMAT))
+        
+        conf_file = self.wait_for_confluence_file()
+        if conf_file:
+            updated['last_confluence_backup'] = conf_timestamp
+            updated['confluence_file'] = conf_file
+            logging.info('Downloaded existing Confluence backup')
+            
+        return updated
 
-            # Either no backup exists, or it's outdated - create a new one
-            logging.info('Creating new Confluence backup')
-            self.trigger_confluence_backup()
-            if self.wait_for_confluence_completion():
-                conf_file = self.wait_for_confluence_file()
-                if conf_file:
-                    updated['last_confluence_backup'] = now
-                    updated['confluence_file'] = conf_file
-
-        # Save updates
-        if updated:
-            merged = {**status, **updated}
-            self.save_status(merged)
+    def _create_new_confluence_backup(self, now):
+        """Create a new Confluence backup and return updated status."""
+        updated = {}
+        logging.info('Creating new Confluence backup')
+        self.trigger_confluence_backup()
+        if self.wait_for_confluence_completion():
+            conf_file = self.wait_for_confluence_file()
+            if conf_file:
+                updated['last_confluence_backup'] = now
+                updated['confluence_file'] = conf_file
+        return updated
 
 @click.command()
 def main():
