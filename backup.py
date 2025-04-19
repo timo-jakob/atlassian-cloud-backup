@@ -23,6 +23,7 @@ STATUS_FILE = os.getenv('STATUS_FILE', 'backup_status.json')
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL_SECONDS', 30))  # seconds
 CONFLUENCE_ATTACHMENT_BACKUP = os.getenv('CB_ATTACHMENTS', 'true').lower() == 'true'
 LOG_CHUNK_SIZE = 100 * 1024 * 1024  # 100 MB
+DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S %Z'  # Common datetime format for display
 
 class BackupController:
     def __init__(self, url, username, api_token):
@@ -337,11 +338,11 @@ class BackupController:
         last_jira = status.get('last_jira_backup')
         if last_jira:
             local_jira = last_jira.astimezone()
-            logging.info('Last Jira backup was at %s (local time)', local_jira.strftime('%Y-%m-%d %H:%M:%S %Z'))
+            logging.info('Last Jira backup was at %s (local time)', local_jira.strftime(DATETIME_FORMAT))
         last_conf = status.get('last_confluence_backup')
         if last_conf:
             local_conf = last_conf.astimezone()
-            logging.info('Last Confluence backup was at %s (local time)', local_conf.strftime('%Y-%m-%d %H:%M:%S %Z'))
+            logging.info('Last Confluence backup was at %s (local time)', local_conf.strftime(DATETIME_FORMAT))
 
         # Fetch and compare Jira task IDs
         server_task_id = self.fetch_last_jira_task_id()
@@ -367,13 +368,13 @@ class BackupController:
                     # Convert milliseconds timestamp to datetime
                     created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
                     # Create string representation of the timestamp in local system timezone
-                    created_str = created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
+                    created_str = created.astimezone().strftime(DATETIME_FORMAT)
                 else:
                     # Error on missing timestamp instead of falling back
                     logging.error('Missing "submitted" timestamp in Jira task %d response: %s', last_task_id, task_info)
                     sys.exit(1)
                 if now - created <= timedelta(hours=24):
-                    logging.info('Reusing Jira task %d from %s (local time %s)', last_task_id, created_str, created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
+                    logging.info('Reusing Jira task %d from %s (local time %s)', last_task_id, created_str, created.astimezone().strftime(DATETIME_FORMAT))
                     if self.wait_for_jira_completion(last_task_id):
                         filename = self.download_jira_file(last_task_id)
                         updated['last_jira_backup'] = created
@@ -410,7 +411,7 @@ class BackupController:
                     if not is_outdated and conf_timestamp > one_week_ago:
                         # Existing backup is recent enough
                         logging.info('Using existing Confluence backup from %s', 
-                                    conf_timestamp.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
+                                    conf_timestamp.astimezone().strftime(DATETIME_FORMAT))
                         
                         # If backup is complete, download it
                         if conf_status.get('currentStatus') == 'COMPLETE':
