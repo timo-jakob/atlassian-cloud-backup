@@ -1,10 +1,14 @@
 """Confluence backup functionality."""
 
+import os
 import time
 import logging
 from datetime import datetime, timedelta, timezone
 
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
+
+# Default timeout of 6 hours (360 minutes), can be overridden with environment variable
+DEFAULT_TIMEOUT_MINUTES = int(os.getenv('CONFLUENCE_BACKUP_TIMEOUT_MINUTES', 480))
 
 class ConfluenceClient:
     """Client for handling Confluence backup operations."""
@@ -100,16 +104,28 @@ class ConfluenceClient:
         logging.info('Confluence backup triggered.')
         return True
 
-    def wait_for_completion(self):
-        """Wait until a Confluence backup completes.
+    def wait_for_completion(self, timeout_minutes=None):
+        """Wait until a Confluence backup completes, with timeout.
         
+        Args:
+            timeout_minutes (int): Maximum time to wait in minutes before timing out
+            
         Returns:
             bool: True if backup completed successfully, False otherwise
         """
-        logging.info('Monitoring Confluence backup progress...')
+        timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
+        logging.info('Monitoring Confluence backup progress (timeout: %d minutes)...', timeout_minutes)
         url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
         
+        start_time = datetime.now()
+        timeout_delta = timedelta(minutes=timeout_minutes)
+        
         while True:
+            # Check if timeout has been exceeded
+            if datetime.now() - start_time > timeout_delta:
+                logging.error(f'Confluence backup timed out after {timeout_minutes} minutes')
+                return False
+                
             response = make_authenticated_request('GET', url, self.username, self.api_token)
             data = response.json()
             
@@ -147,15 +163,27 @@ class ConfluenceClient:
         # Download the file
         return self._download_backup_file(download_details)
     
-    def _wait_for_complete_status(self):
-        """Wait until the Confluence backup status is complete.
+    def _wait_for_complete_status(self, timeout_minutes=None):
+        """Wait until the Confluence backup status is complete, with timeout.
         
+        Args:
+            timeout_minutes (int): Maximum time to wait in minutes before timing out
+            
         Returns:
             dict or None: Backup data if complete, None if failed
         """
+        timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
         url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
         
+        start_time = datetime.now()
+        timeout_delta = timedelta(minutes=timeout_minutes)
+        
         while True:
+            # Check if timeout has been exceeded
+            if datetime.now() - start_time > timeout_delta:
+                logging.error(f'Confluence backup status check timed out after {timeout_minutes} minutes')
+                return None
+                
             response = make_authenticated_request('GET', url, self.username, self.api_token)
             data = response.json()
             

@@ -1,11 +1,15 @@
 """Jira backup functionality."""
 
+import os
 import time
 import logging
 from datetime import datetime, timedelta, timezone
 
 from atlassian import Jira
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
+
+# Default timeout of 6 hours (360 minutes), can be overridden with environment variable
+DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
 
 class JiraClient:
     """Client for handling Jira backup operations."""
@@ -135,20 +139,30 @@ class JiraClient:
         logging.info('Jira backup triggered, task ID: %s', task_id)
         return int(task_id)
         
-    def wait_for_completion(self, task_id):
+    def wait_for_completion(self, task_id, timeout_minutes=None):
         """Wait until a Jira backup task completes.
         
         Args:
             task_id (int): Task ID to monitor
+            timeout_minutes (int): Maximum time to wait in minutes before timing out
             
         Returns:
             bool: True if backup completed successfully, False otherwise
         """
-        logging.info('Waiting for Jira backup to complete (task %d)...', task_id)
+        timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
+        logging.info('Waiting for Jira backup to complete (task %d, timeout: %d minutes)...', task_id, timeout_minutes)
         endpoint = '/rest/backup/1/export/getProgress'
         url = f"{self.url.rstrip('/')}{endpoint}"
         
+        start_time = datetime.now()
+        timeout_delta = timedelta(minutes=timeout_minutes)
+        
         while True:
+            # Check if timeout has been exceeded
+            if datetime.now() - start_time > timeout_delta:
+                logging.error(f'Jira backup timed out after {timeout_minutes} minutes')
+                return False
+                
             response = make_authenticated_request(
                 'GET', url, self.username, self.api_token, 
                 params={'taskId': task_id}
