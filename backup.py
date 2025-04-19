@@ -435,7 +435,7 @@ class BackupController:
         
         if not submitted_ms:
             logging.error('Missing "submitted" timestamp in Jira task %d response: %s', task_id, task_info)
-            sys.exit(1)
+            raise ValueError(f'Missing "submitted" timestamp in Jira task {task_id} response: {task_info}')
             
         # Convert milliseconds timestamp to datetime
         created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
