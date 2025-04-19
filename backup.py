@@ -377,7 +377,7 @@ class BackupController:
         updated.update(jira_updated)
 
         # Process Confluence backup
-        confluence_updated = self._handle_confluence_backup(status, now)
+        confluence_updated = self._handle_confluence_backup()
         updated.update(confluence_updated)
 
         # Save updates
@@ -466,7 +466,7 @@ class BackupController:
             updated['jira_file'] = filename
         return updated
 
-    def _handle_confluence_backup(self, status, now):
+    def _handle_confluence_backup(self):
         """Handle Confluence backup process and return updated status."""
         updated = {}
         conf_status = self.get_confluence_backup_status()
@@ -476,7 +476,7 @@ class BackupController:
             return updated
         
         if self._can_use_existing_confluence_backup(conf_status, now):
-            return self._use_existing_confluence_backup(conf_status, now)
+            return self._use_existing_confluence_backup(conf_status)
         
         return self._create_new_confluence_backup(now)
 
@@ -496,7 +496,7 @@ class BackupController:
             logging.warning('Invalid timestamp in Confluence backup status: %s', conf_time)
             return False
 
-    def _use_existing_confluence_backup(self, conf_status, now):
+    def _use_existing_confluence_backup(self, conf_status):
         """Use and download an existing Confluence backup."""
         updated = {}
         conf_time = conf_status.get('time')
