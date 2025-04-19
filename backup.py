@@ -265,13 +265,28 @@ class BackupController:
         logging.info('Confluence backup triggered.')
 
     def wait_for_confluence_file(self):
+        """Wait for Confluence backup to complete and download the file."""
         logging.info('Waiting for Confluence backup file...')
         
         # Create folder based on URL
         folder_name = self._get_folder_name()
         os.makedirs(folder_name, exist_ok=True)
         
-        # Get the download URL from the progress API
+        # Wait for the backup to be ready
+        backup_data = self._wait_for_confluence_complete_status()
+        if not backup_data:
+            return None
+            
+        # Get download details
+        download_details = self._get_confluence_download_details(backup_data, folder_name)
+        if not download_details:
+            return None
+            
+        # Download the file
+        return self._download_confluence_backup(download_details)
+
+    def _wait_for_confluence_complete_status(self):
+        """Wait until the Confluence backup status is complete."""
         url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
         
         while True:
@@ -282,43 +297,41 @@ class BackupController:
             status = data.get('currentStatus', '')
             
             if status == 'COMPLETE':
-                # Get the filename from the API response
-                remote_filename = data.get('filename')
-                if not remote_filename:
-                    logging.error("No filename found in Confluence backup response")
-                    return None
-                
-                logging.info(f"Found Confluence backup filename: {remote_filename}")
-                download_url = f"{self.url.rstrip('/')}/{remote_filename}"
-                
-                # Local filename (with folder)
-                local_filename = os.path.join(folder_name, os.path.basename(remote_filename))
-                
-                logging.info('Downloading Confluence backup from: %s', download_url)
-                dl = requests.get(download_url, auth=(self.username, self.api_token), stream=True)
-                dl.raise_for_status()
-                
-                bytes_downloaded = 0
-                next_log_threshold = LOG_CHUNK_SIZE
-                with open(local_filename, 'wb') as f:
-                    for chunk in dl.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            bytes_downloaded += len(chunk)
-                            if bytes_downloaded >= next_log_threshold:
-                                mb = bytes_downloaded / (1024 * 1024)
-                                logging.info('Downloaded %.2f MB of Confluence backup so far...', mb)
-                                next_log_threshold += LOG_CHUNK_SIZE
-                
-                logging.info('Downloaded Confluence backup to %s', local_filename)
-                return local_filename
+                return data
             
-            elif status in ('FAILED', 'ERROR'):
+            if status in ('FAILED', 'ERROR'):
                 logging.error('Confluence backup failed with status: %s', status)
                 return None
             
             logging.info('Backup not yet complete (status: %s), waiting...', status)
             time.sleep(POLL_INTERVAL)
+
+    def _get_confluence_download_details(self, data, folder_name):
+        """Extract download URL and local filename from backup data."""
+        remote_filename = data.get('filename')
+        if not remote_filename:
+            logging.error("No filename found in Confluence backup response")
+            return None
+        
+        logging.info("Found Confluence backup filename: %s", remote_filename)
+        download_url = f"{self.url.rstrip('/')}/{remote_filename}"
+        local_filename = os.path.join(folder_name, os.path.basename(remote_filename))
+        
+        return {
+            'url': download_url,
+            'filename': local_filename
+        }
+
+    def _download_confluence_backup(self, download_details):
+        """Download the Confluence backup file."""
+        url = download_details['url']
+        local_filename = download_details['filename']
+        
+        logging.info('Downloading Confluence backup from: %s', url)
+        dl = requests.get(url, auth=(self.username, self.api_token), stream=True)
+        dl.raise_for_status()
+        
+        return self._download_file(url, local_filename, "Confluence")
 
     def get_confluence_backup_status(self):
         """Check if a Confluence backup exists and get its status"""
