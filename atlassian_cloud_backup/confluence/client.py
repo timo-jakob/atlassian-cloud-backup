@@ -92,7 +92,7 @@ class ConfluenceClient:
         }
         payload = {'cbAttachments': self.include_attachments}
         
-        response = make_authenticated_request(
+        make_authenticated_request(
             'POST', endpoint, self.username, self.api_token,
             headers=headers, json=payload
         )
