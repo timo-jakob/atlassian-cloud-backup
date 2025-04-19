@@ -144,19 +144,28 @@ class BackupController:
             status = resp.get('status', '').upper()
             logging.info('Progress: %s%%, status: %s', percent, status)
             if status in ('COMPLETE', 'DONE', 'SUCCESSFUL') or percent == 100:
-                logging.info('Jira backup completed.')
+                logging.info('Jira backup in the Atlassian Cloud completed.')
                 return True
             if status in ('FAILED', 'ERROR'):
-                logging.error('Jira backup failed with status: %s', status)
+                logging.error('Jira backup in the Atlassian Cloud failed with status: %s', status)
                 return False
             time.sleep(POLL_INTERVAL)
 
     def download_jira_file(self, task_id):
+        """Download Jira backup file for the given task ID."""
+        download_url = self._get_jira_download_url(task_id)
+        filename = self._prepare_jira_backup_path()
+        
+        return self._download_file(download_url, filename, "Jira")
+
+    def _get_jira_download_url(self, task_id):
+        """Get the download URL for a Jira backup task."""
         logging.info('Retrieving download URL for Jira backup task %d', task_id)
         endpoint = '/rest/backup/1/export/getProgress'
         url = f"{self.url.rstrip('/')}{endpoint}"
         r = requests.get(url, auth=HTTPBasicAuth(self.username, self.api_token), params={'taskId': task_id})
         r.raise_for_status()
+        
         data = r.json()
         result = data.get('result')
         if not result:
@@ -164,48 +173,73 @@ class BackupController:
         
         download_url = f"{self.url.rstrip('/')}/plugins/servlet/{result}"
         logging.info('Found Jira backup download URL: %s', download_url)
-        r2 = requests.get(download_url, auth=HTTPBasicAuth(self.username, self.api_token), stream=True)
-        r2.raise_for_status()
+        return download_url
 
-        # Create folder based on URL
+    def _prepare_jira_backup_path(self):
+        """Create folder and return the full backup file path."""
         folder_name = self._get_folder_name()
         os.makedirs(folder_name, exist_ok=True)
         
-        # Update filename to include folder
-        filename = os.path.join(folder_name, f"jira-backup-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.zip")
+        filename = os.path.join(
+            folder_name, 
+            f"jira-backup-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.zip"
+        )
+        return filename
+
+    def _download_file(self, url, filename, service_name):
+        """Generic file download with progress tracking."""
+        r = requests.get(url, auth=HTTPBasicAuth(self.username, self.api_token), stream=True)
+        r.raise_for_status()
+
         bytes_downloaded = 0
         next_log_threshold = LOG_CHUNK_SIZE
         start_time = time.time()
         last_log_time = start_time
         
         with open(filename, 'wb') as f:
-            for chunk in r2.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    bytes_downloaded += len(chunk)
-                    current_time = time.time()
+            for chunk in r.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
                     
-                    if bytes_downloaded >= next_log_threshold:
-                        mb = bytes_downloaded / (1024 * 1024)
-                        elapsed = current_time - start_time
-                        speed = mb / elapsed if elapsed > 0 else 0
-                        
-                        # Calculate recent speed (since last log)
-                        recent_elapsed = current_time - last_log_time
-                        recent_bytes = LOG_CHUNK_SIZE / (1024 * 1024)  # Convert to MB
-                        recent_speed = recent_bytes / recent_elapsed if recent_elapsed > 0 else 0
-                        
-                        logging.info('Downloaded %.2f MB of Jira backup (%.2f MB/s, current: %.2f MB/s)...', 
-                                    mb, speed, recent_speed)
-                        next_log_threshold += LOG_CHUNK_SIZE
-                        last_log_time = current_time
+                f.write(chunk)
+                bytes_downloaded += len(chunk)
+                current_time = time.time()
+                
+                if bytes_downloaded >= next_log_threshold:
+                    self._log_download_progress(
+                        service_name, 
+                        bytes_downloaded, 
+                        current_time, 
+                        start_time, 
+                        last_log_time
+                    )
+                    next_log_threshold += LOG_CHUNK_SIZE
+                    last_log_time = current_time
         
+        self._log_download_complete(service_name, filename, bytes_downloaded, start_time)
+        return filename
+
+    def _log_download_progress(self, service_name, bytes_downloaded, current_time, start_time, last_log_time):
+        """Log download progress with speed metrics."""
+        mb = bytes_downloaded / (1024 * 1024)
+        elapsed = current_time - start_time
+        speed = mb / elapsed if elapsed > 0 else 0
+        
+        # Calculate recent speed (since last log)
+        recent_elapsed = current_time - last_log_time
+        recent_bytes = LOG_CHUNK_SIZE / (1024 * 1024)  # Convert to MB
+        recent_speed = recent_bytes / recent_elapsed if recent_elapsed > 0 else 0
+        
+        logging.info('Downloaded %.2f MB of %s backup (%.2f MB/s, current: %.2f MB/s)...', 
+                    mb, service_name, speed, recent_speed)
+
+    def _log_download_complete(self, service_name, filename, bytes_downloaded, start_time):
+        """Log completion of download with final statistics."""
         total_elapsed = time.time() - start_time
         total_mb = bytes_downloaded / (1024 * 1024)
         avg_speed = total_mb / total_elapsed if total_elapsed > 0 else 0
-        logging.info('Downloaded Jira backup to %s (%.2f MB in %.1f seconds, avg: %.2f MB/s)', 
-                    filename, total_mb, total_elapsed, avg_speed)
-        return filename
+        logging.info('Downloaded %s backup to %s (%.2f MB in %.1f seconds, avg: %.2f MB/s)', 
+                    service_name, filename, total_mb, total_elapsed, avg_speed)
 
     def _get_folder_name(self):
         """Create a sanitized folder name from the Atlassian URL."""
