@@ -1,101 +1,489 @@
-import requests
+#!/usr/bin/env python3
+import os
+import sys
+import json
 import time
+from datetime import datetime, timedelta, timezone
+import logging
+import click
+import requests
 from requests.auth import HTTPBasicAuth
+from atlassian import Jira
 
-class AtlassianCloudBackup:
+# Configure logging to stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    stream=sys.stdout
+)
 
-    def __init__(self, jira_url, username, api_token, logging):
-        self.jira_url = jira_url
+# Constants
+STATUS_FILE = os.getenv('STATUS_FILE', 'backup_status.json')
+POLL_INTERVAL = int(os.getenv('POLL_INTERVAL_SECONDS', 30))  # seconds
+CONFLUENCE_ATTACHMENT_BACKUP = os.getenv('CB_ATTACHMENTS', 'true').lower() == 'true'
+LOG_CHUNK_SIZE = 100 * 1024 * 1024  # 100 MB
+
+class BackupController:
+    def __init__(self, url, username, api_token):
+        # Store provided credentials
+        self.url = url
         self.username = username
         self.api_token = api_token
-        self.logging = logging
-
-        self.BACKUP_TASKID = "/rest/backup/1/export/lastTaskId" # the path of the endpoint to get the last task ID which is our backup task ID
-        self.BACKUP_PROGRESS = "/rest/api/3/task/" # the path of the endpoint to get the progress of the backup task
-        self.BACKUP_DOWNLOAD = "/rest/backup/1/export/getProgress?taskId=" # the path of the endpoint to get the download URL of the backup file
-        self.BACKUP_TRIGGER = "/rest/backup/1/export/runbackup" # the path of the endpoint to trigger the backup
-
-        if not all([self.jira_url, self.username, self.api_token]):
-            raise EnvironmentError("Please set the JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN environment variables.")
         
-    def _get_json_response(self, url):
-        response = requests.get(
-            url,
-            auth=HTTPBasicAuth(self.username, self.api_token),
-            headers={'Content-Type': 'application/json'}
-        )
-        return response.json()
-    
-    def get_backup_task_id(self):
-        url = f'{self.jira_url}{self.BACKUP_TASKID}'   # the full URL of the endpoint to use for the request
-        return self._get_json_response(url)
-    
-    def _get_task_progress(self, task_id):
-        url = f'{self.jira_url}{self.BACKUP_PROGRESS}{task_id}'
-        return self._get_json_response(url)
-    
-    def _get_download_url(self, task_id):
-        url = f'{self.jira_url}{self.BACKUP_DOWNLOAD}{task_id}'
-        response = self._get_json_response(url)
-        return f'{self.jira_url}/plugins/servlet/{response.get("result")}'
-    
-    def wait_for_backup_to_complete(self, task_id):
+        # Log the URL being used
+        logging.info('Using Atlassian Cloud URL: %s', self.url)
+        logging.info('Connecting to Jira instance at %s', self.url)
+        self.jira = Jira(url=self.url, username=self.username, password=self.api_token)
+
+    def load_status(self):
+        # Create a URL-specific status file
+        status_file = self._get_status_filename()
+        
+        if not os.path.isfile(status_file):
+            return {}
+        
+        with open(status_file, 'r') as f:
+            data = json.load(f)
+        
+        for key in ['last_jira_backup', 'last_confluence_backup']:
+            if key in data:
+                try:
+                    data[key] = datetime.fromisoformat(data[key])
+                except ValueError:
+                    logging.warning('Invalid datetime format in status for %s: %s', key, data[key])
+        return data
+
+    def save_status(self, status):
+        to_save = {}
+        if 'last_jira_backup' in status:
+            to_save['last_jira_backup'] = status['last_jira_backup'].isoformat()
+            to_save['jira_task_id'] = status.get('jira_task_id')
+            to_save['jira_file'] = status.get('jira_file')
+        if 'last_confluence_backup' in status:
+            to_save['last_confluence_backup'] = status['last_confluence_backup'].isoformat()
+            to_save['confluence_file'] = status.get('confluence_file')
+        
+        # Use URL-specific status file
+        status_file = self._get_status_filename()
+        
+        with open(status_file, 'w') as f:
+            json.dump(to_save, f, indent=2)
+        logging.info('Status file updated: %s', status_file)
+
+    def _get_status_filename(self):
+        """Create a URL-specific status filename."""
+        # Use the folder name based on URL as part of the status filename
+        folder_name = self._get_folder_name()
+        
+        # Get the base status filename from environment or use default
+        base_status_file = os.path.basename(STATUS_FILE)
+        
+        # Create URL-specific status file by inserting folder name before extension
+        name, ext = os.path.splitext(base_status_file)
+        return f"{name}_{folder_name}{ext}"
+
+    def should_backup(self, last_time):
+        return (datetime.now(timezone.utc) - last_time) > timedelta(hours=24)
+
+    # --- Jira methods ---
+    def fetch_last_jira_task_id(self):
+        logging.info('Fetching last Jira backup task ID from server')
+        url = f"{self.url.rstrip('/')}/rest/backup/1/export/lastTaskId"
+        r = requests.get(url, auth=HTTPBasicAuth(self.username, self.api_token))
+        r.raise_for_status()
+        
+        # Handle empty response
+        response_text = r.text.strip()
+        if not response_text:
+            logging.info('Server returned empty lastTaskId, no previous backup exists')
+            return None
+        
+        try:
+            task_id = int(response_text)
+            logging.info('Server lastTaskId: %d', task_id)
+            return task_id
+        except ValueError:
+            # Only raise if it's not empty but also not a valid integer
+            raise RuntimeError(f"Unexpected response for lastTaskId: '{response_text}'")
+
+    def fetch_jira_task_info(self, task_id):
+        logging.info('Fetching Jira task info for ID %d', task_id)
+        try:
+            return self.jira.get(f'/rest/api/3/task/{task_id}')
+        except Exception:
+            url = f"{self.url.rstrip('/')}/rest/api/3/task/{task_id}"
+            r = requests.get(url, auth=HTTPBasicAuth(self.username, self.api_token))
+            r.raise_for_status()
+            return r.json()
+
+    def trigger_jira_backup(self):
+        logging.info('Triggering Jira backup via POST /rest/backup/1/export/runbackup')
+        url = f"{self.url.rstrip('/')}/rest/backup/1/export/runbackup"
+        headers = {'Content-Type': 'application/json'}
+        payload = {"cbAttachments": "true", "exportToCloud": "true"}
+        r = requests.post(url, auth=HTTPBasicAuth(self.username, self.api_token), headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
+        task_id = data.get('taskId') or data.get('task_id')
+        if not task_id:
+            raise RuntimeError('No taskId returned from Jira backup runbackup.')
+        logging.info('Jira backup triggered, task ID: %s', task_id)
+        return int(task_id)
+
+    def wait_for_jira_completion(self, task_id):
+        logging.info('Waiting for Jira backup to complete (task %d)...', task_id)
+        endpoint = '/rest/backup/1/export/getProgress'
+        url = f"{self.url.rstrip('/')}{endpoint}"
         while True:
-            backup_status = self._get_task_progress(task_id)
-        
-            status = backup_status.get('status')
-            progress = backup_status.get('progress')
-
-            if status == 'COMPLETE':
-                self.logging.info("Backup completed.")
+            r = requests.get(url, auth=HTTPBasicAuth(self.username, self.api_token), params={'taskId': task_id})
+            r.raise_for_status()
+            resp = r.json()
+            percent = resp.get('progress', 0)
+            status = resp.get('status', '').upper()
+            logging.info('Progress: %s%%, status: %s', percent, status)
+            if status in ('COMPLETE', 'DONE', 'SUCCESSFUL') or percent == 100:
+                logging.info('Jira backup completed.')
                 return True
-            elif status == 'FAILED':
-                self.logging.error("Backup failed.")
+            if status in ('FAILED', 'ERROR'):
+                logging.error('Jira backup failed with status: %s', status)
                 return False
-            elif status == 'RUNNING' or status == 'ENQUEUED':
-                self.logging.info("Backup in progress..." + str(progress))
-                time.sleep(60)
-            else:
-                self.logging.info(f"Backup in status {backup_status}!")
-                return False
+            time.sleep(POLL_INTERVAL)
 
-    def download_backup_file(self, task_id):
-        download_url = self._get_download_url(task_id)
-        local_file_path = f'jira_backup_{task_id}.zip'
+    def download_jira_file(self, task_id):
+        logging.info('Retrieving download URL for Jira backup task %d', task_id)
+        endpoint = '/rest/backup/1/export/getProgress'
+        url = f"{self.url.rstrip('/')}{endpoint}"
+        r = requests.get(url, auth=HTTPBasicAuth(self.username, self.api_token), params={'taskId': task_id})
+        r.raise_for_status()
+        data = r.json()
+        result = data.get('result')
+        if not result:
+            raise RuntimeError('No result found in Jira backup response.')
+        
+        download_url = f"{self.url.rstrip('/')}/plugins/servlet/{result}"
+        logging.info('Found Jira backup download URL: %s', download_url)
+        r2 = requests.get(download_url, auth=HTTPBasicAuth(self.username, self.api_token), stream=True)
+        r2.raise_for_status()
 
-        self.logging.info(f"Downloading backup file from {download_url}...")
-        response = requests.get(
-            download_url,
-            auth=HTTPBasicAuth(self.username, self.api_token),
-            stream=True
-        )
-        with open(local_file_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024):
-                f.write(chunk)
+        # Create folder based on URL
+        folder_name = self._get_folder_name()
+        os.makedirs(folder_name, exist_ok=True)
+        
+        # Update filename to include folder
+        filename = os.path.join(folder_name, f"jira-backup-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.zip")
+        bytes_downloaded = 0
+        next_log_threshold = LOG_CHUNK_SIZE
+        start_time = time.time()
+        last_log_time = start_time
+        
+        with open(filename, 'wb') as f:
+            for chunk in r2.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    bytes_downloaded += len(chunk)
+                    current_time = time.time()
+                    
+                    if bytes_downloaded >= next_log_threshold:
+                        mb = bytes_downloaded / (1024 * 1024)
+                        elapsed = current_time - start_time
+                        speed = mb / elapsed if elapsed > 0 else 0
+                        
+                        # Calculate recent speed (since last log)
+                        recent_elapsed = current_time - last_log_time
+                        recent_bytes = LOG_CHUNK_SIZE / (1024 * 1024)  # Convert to MB
+                        recent_speed = recent_bytes / recent_elapsed if recent_elapsed > 0 else 0
+                        
+                        logging.info('Downloaded %.2f MB of Jira backup (%.2f MB/s, current: %.2f MB/s)...', 
+                                    mb, speed, recent_speed)
+                        next_log_threshold += LOG_CHUNK_SIZE
+                        last_log_time = current_time
+        
+        total_elapsed = time.time() - start_time
+        total_mb = bytes_downloaded / (1024 * 1024)
+        avg_speed = total_mb / total_elapsed if total_elapsed > 0 else 0
+        logging.info('Downloaded Jira backup to %s (%.2f MB in %.1f seconds, avg: %.2f MB/s)', 
+                    filename, total_mb, total_elapsed, avg_speed)
+        return filename
 
-    def trigger_backup(self):
-        # Endpoint to trigger backup
-        backup_url = f'{self.jira_url}/rest/backup/1/export/runbackup'
+    def _get_folder_name(self):
+        """Create a sanitized folder name from the Atlassian URL."""
+        # Remove protocol prefix and any special characters
+        import re
+        folder = re.sub(r'^https?://', '', self.url)
+        folder = re.sub(r'[/\\:*?"<>|]', '_', folder)
+        return folder.strip('_')
 
-        # Payload to trigger backup
-        payload = {
-            "cbAttachments": True,  # Set to True if you want to include attachments
-            "exportToCloud": False  # Set to False to download to local disk
+    # --- Confluence Cloud methods ---
+    def trigger_confluence_backup(self):
+        logging.info('Triggering Confluence backup...')
+        endpoint = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/runbackup"
+        logging.info('Confluence backup endpoint: %s', endpoint)
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Atlassian-Token': 'no-check',
+            'X-Requested-With': 'XMLHttpRequest'
         }
+        payload = {'cbAttachments': CONFLUENCE_ATTACHMENT_BACKUP}
+        resp = requests.post(endpoint, auth=(self.username, self.api_token), headers=headers, json=payload)
+        resp.raise_for_status()
+        logging.info('Confluence backup triggered.')
 
-        # Trigger the backup
-        response = requests.post(
-            backup_url,
-            auth=HTTPBasicAuth(self.username, self.api_token),
-            headers={'Content-Type': 'application/json'},
-            json=payload
-        )
+    def wait_for_confluence_file(self):
+        logging.info('Waiting for Confluence backup file...')
+        
+        # Create folder based on URL
+        folder_name = self._get_folder_name()
+        os.makedirs(folder_name, exist_ok=True)
+        
+        # Get the download URL from the progress API
+        url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
+        
+        while True:
+            r = requests.get(url, auth=(self.username, self.api_token))
+            r.raise_for_status()
+            data = r.json()
+            
+            status = data.get('currentStatus', '')
+            
+            if status == 'COMPLETE':
+                # Get the filename from the API response
+                remote_filename = data.get('filename')
+                if not remote_filename:
+                    logging.error("No filename found in Confluence backup response")
+                    return None
+                
+                logging.info(f"Found Confluence backup filename: {remote_filename}")
+                download_url = f"{self.url.rstrip('/')}/{remote_filename}"
+                
+                # Local filename (with folder)
+                local_filename = os.path.join(folder_name, os.path.basename(remote_filename))
+                
+                logging.info('Downloading Confluence backup from: %s', download_url)
+                dl = requests.get(download_url, auth=(self.username, self.api_token), stream=True)
+                dl.raise_for_status()
+                
+                bytes_downloaded = 0
+                next_log_threshold = LOG_CHUNK_SIZE
+                with open(local_filename, 'wb') as f:
+                    for chunk in dl.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            bytes_downloaded += len(chunk)
+                            if bytes_downloaded >= next_log_threshold:
+                                mb = bytes_downloaded / (1024 * 1024)
+                                logging.info('Downloaded %.2f MB of Confluence backup so far...', mb)
+                                next_log_threshold += LOG_CHUNK_SIZE
+                
+                logging.info('Downloaded Confluence backup to %s', local_filename)
+                return local_filename
+            
+            elif status in ('FAILED', 'ERROR'):
+                logging.error('Confluence backup failed with status: %s', status)
+                return None
+            
+            logging.info('Backup not yet complete (status: %s), waiting...', status)
+            time.sleep(POLL_INTERVAL)
 
-        success = response.status_code == 200
-        if success:
-            self.logging.info("Backup triggered successfully.")
+    def get_confluence_backup_status(self):
+        """Check if a Confluence backup exists and get its status"""
+        logging.info('Checking Confluence backup status')
+        url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
+        try:
+            r = requests.get(url, auth=(self.username, self.api_token))
+            r.raise_for_status()
+            if r.status_code == 204:
+                logging.info('Confluence appears to be unavailable or unlicensed for this instance. Skipping Confluence backup.')
+                return None
+            return r.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in (401, 403, 404):
+                logging.info('Confluence appears to be unavailable or unlicensed for this instance. Skipping Confluence backup.')
+                return None
+            else:
+                # For other HTTP errors, still raise the exception
+                logging.error('Error checking Confluence status: %s', str(e))
+                raise
+
+    def wait_for_confluence_completion(self):
+        """Poll until Confluence backup is complete"""
+        logging.info('Monitoring Confluence backup progress...')
+        url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
+        
+        while True:
+            r = requests.get(url, auth=(self.username, self.api_token))
+            r.raise_for_status()
+            data = r.json()
+            
+            status = data.get('currentStatus', '')
+            progress = data.get('alternativePercentage', 0)
+            logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
+            
+            if status == 'COMPLETE':
+                logging.info('Confluence backup completed.')
+                return True
+            elif status in ('FAILED', 'ERROR'):
+                logging.error('Confluence backup failed with status: %s', status)
+                return False
+                
+            time.sleep(POLL_INTERVAL)
+
+    def orchestrate(self):
+        status = self.load_status()
+        now = datetime.now(timezone.utc)
+        updated = {}
+
+        # Log last backups in local timezone
+        last_jira = status.get('last_jira_backup')
+        if last_jira:
+            local_jira = last_jira.astimezone()
+            logging.info('Last Jira backup was at %s (local time)', local_jira.strftime('%Y-%m-%d %H:%M:%S %Z'))
+        last_conf = status.get('last_confluence_backup')
+        if last_conf:
+            local_conf = last_conf.astimezone()
+            logging.info('Last Confluence backup was at %s (local time)', local_conf.strftime('%Y-%m-%d %H:%M:%S %Z'))
+
+        # Fetch and compare Jira task IDs
+        server_task_id = self.fetch_last_jira_task_id()
+        local_task_id = status.get('jira_task_id')
+        local_file = status.get('jira_file')
+
+        # Skip if we've already processed this task ID
+        if server_task_id is not None and server_task_id == local_task_id and local_file:
+            logging.info('Jira task ID %d already processed in previous run. Skipping Jira backup for %s', 
+                        server_task_id, self.url)
+            used_existing = True
         else:
-            self.logging.error(f"Failed to trigger backup: {response.status_code}")
-            self.logging.error(response.text)
+            if server_task_id != local_task_id:
+                logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
+            last_task_id = server_task_id
+            
+            # Jira backup logic
+            used_existing = False
+            if last_task_id:  # This will now skip the block if last_task_id is None
+                task_info = self.fetch_jira_task_info(last_task_id)
+                submitted_ms = task_info.get('submitted')
+                if submitted_ms:
+                    # Convert milliseconds timestamp to datetime
+                    created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
+                    # Create string representation of the timestamp in local system timezone
+                    created_str = created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
+                else:
+                    # Error on missing timestamp instead of falling back
+                    logging.error('Missing "submitted" timestamp in Jira task %d response: %s', last_task_id, task_info)
+                    sys.exit(1)
+                if now - created <= timedelta(hours=24):
+                    logging.info('Reusing Jira task %d from %s (local time %s)', last_task_id, created_str, created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
+                    if self.wait_for_jira_completion(last_task_id):
+                        filename = self.download_jira_file(last_task_id)
+                        updated['last_jira_backup'] = created
+                        updated['jira_task_id'] = last_task_id
+                        updated['jira_file'] = filename
+                        used_existing = True
+                else:
+                    logging.info('Existing Jira task %d is older than 24 h (%s), triggering new.', last_task_id, created_str)
+            if not used_existing:
+                new_task_id = self.trigger_jira_backup()
+                if self.wait_for_jira_completion(new_task_id):
+                    filename = self.download_jira_file(new_task_id)
+                    updated['last_jira_backup'] = now
+                    updated['jira_task_id'] = new_task_id
+                    updated['jira_file'] = filename
 
-        return success
+        # Confluence backup
+        # Check existing backup status first
+        conf_status = self.get_confluence_backup_status()
+
+        # Skip Confluence backup if not available (conf_status is None)
+        if conf_status is None:
+            logging.info('Skipping Confluence backup for %s', self.url)
+        else:
+            conf_time = conf_status.get('time')
+            is_outdated = conf_status.get('isOutdated', True)
+
+            if conf_time:
+                # Convert timestamp to datetime if present
+                try:
+                    conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
+                    one_week_ago = now - timedelta(days=7)
+                    
+                    if not is_outdated and conf_timestamp > one_week_ago:
+                        # Existing backup is recent enough
+                        logging.info('Using existing Confluence backup from %s', 
+                                    conf_timestamp.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
+                        
+                        # If backup is complete, download it
+                        if conf_status.get('currentStatus') == 'COMPLETE':
+                            conf_file = self.wait_for_confluence_file()
+                            if conf_file:
+                                updated['last_confluence_backup'] = conf_timestamp
+                                updated['confluence_file'] = conf_file
+                                
+                            logging.info('Downloaded existing Confluence backup')
+                except (ValueError, TypeError):
+                    logging.warning('Invalid timestamp in Confluence backup status: %s', conf_time)
+
+            # Either no backup exists, or it's outdated - create a new one
+            logging.info('Creating new Confluence backup')
+            self.trigger_confluence_backup()
+            if self.wait_for_confluence_completion():
+                conf_file = self.wait_for_confluence_file()
+                if conf_file:
+                    updated['last_confluence_backup'] = now
+                    updated['confluence_file'] = conf_file
+
+        # Save updates
+        if updated:
+            merged = {**status, **updated}
+            self.save_status(merged)
+
+@click.command()
+def main():
+    """
+    CLI tool to backup Atlassian Cloud instances (Jira & Confluence).
+    
+    Environment variables:
+    - ATLASSIAN_INSTANCES: Comma-separated list of instance names (e.g., "company1,company2")
+      Script will convert these to https://<name>.atlassian.net URLs
+    - ATLASSIAN_USERNAME: Username for Atlassian authentication
+    - ATLASSIAN_API_TOKEN: API token for Atlassian authentication
+    """
+    # Get instance names from environment
+    instance_names = os.getenv('ATLASSIAN_INSTANCES', '')
+    
+    # Process instance names into standard Atlassian URLs
+    urls = []
+    if instance_names:
+        names = [name.strip() for name in instance_names.split(',') if name.strip()]
+        urls = [f"https://{name}.atlassian.net" for name in names]
+    
+    if not urls:
+        logging.error('No valid Atlassian instances provided. Set ATLASSIAN_INSTANCES environment variable.')
+        sys.exit(1)
+        
+    username = os.getenv('ATLASSIAN_USERNAME')
+    api_token = os.getenv('ATLASSIAN_API_TOKEN')
+    
+    if not all([username, api_token]):
+        logging.error(
+            'Missing one of ATLASSIAN_USERNAME or ATLASSIAN_API_TOKEN environment variables.'
+        )
+        sys.exit(1)
+    
+    logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
+    
+    success_count = 0
+    for url in urls:
+        try:
+            logging.info('Starting backup for Atlassian instance: %s', url)
+            controller = BackupController(url=url, username=username, api_token=api_token)
+            controller.orchestrate()
+            success_count += 1
+            logging.info('Completed backup for %s', url)
+        except Exception as e:
+            logging.error('Failed to backup %s: %s', url, str(e))
+            
+    logging.info('Backup completed for %d of %d Atlassian instances', success_count, len(urls))
+
+if __name__ == '__main__':
+    main()
