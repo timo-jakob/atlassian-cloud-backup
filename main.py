@@ -27,7 +27,8 @@ def main():
     CLI tool to backup Atlassian Cloud instances (Jira & Confluence).
     
     Configuration can be provided via environment variables or a properties file
-    located at ~/.atlassian-cloud-backup/backup.properties.
+    located at ~/.atlassian-cloud-backup/backup.properties. The properties file
+    must include an [atlassian] section header for the keys used in the configuration.
     Environment variables take precedence.
 
     Environment variables / Properties file keys:
