@@ -14,7 +14,7 @@ DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
 class JiraClient:
     """Client for handling Jira backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30):
+    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None):
         """
         Initialize Jira client.
         
@@ -23,11 +23,13 @@ class JiraClient:
             username (str): Username for authentication
             api_token (str): API token for authentication
             poll_interval (int): Seconds to wait between polling requests
+            backup_target_directory (str, optional): Base directory for backups.
         """
         self.url = url
         self.username = username
         self.api_token = api_token
         self.poll_interval = poll_interval
+        self.backup_target_directory = backup_target_directory # Store the directory
         
         # Log the URL being used
         logging.info('Connecting to Jira instance at %s', self.url)
@@ -252,7 +254,8 @@ class JiraClient:
             if self.wait_for_completion(task_id):
                 # Wait successful, now download the file
                 from atlassian_cloud_backup.utils.file_utils import FileManager
-                file_manager = FileManager(self.url)
+                # Pass the backup_target_directory to FileManager
+                file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
                 filename = file_manager.prepare_backup_path("Jira")
                 
                 download_filename = self.download_backup_file(task_id, filename)
@@ -280,7 +283,8 @@ class JiraClient:
         if self.wait_for_completion(new_task_id):
             # Wait successful, now download the file
             from atlassian_cloud_backup.utils.file_utils import FileManager
-            file_manager = FileManager(self.url)
+            # Pass the backup_target_directory to FileManager
+            file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
             filename = file_manager.prepare_backup_path("Jira")
             
             download_filename = self.download_backup_file(new_task_id, filename)
