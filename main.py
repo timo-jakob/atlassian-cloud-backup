@@ -27,8 +27,7 @@ def main():
     CLI tool to backup Atlassian Cloud instances (Jira & Confluence).
     
     Configuration can be provided via environment variables or a properties file
-    located at ~/.atlassian-cloud-backup/backup.properties. The properties file
-    must include an [atlassian] section header for the keys used in the configuration.
+    located at ~/.atlassian-cloud-backup/backup.properties.
     Environment variables take precedence.
 
     Environment variables / Properties file keys:
@@ -37,6 +36,8 @@ def main():
     - ATLASSIAN_USERNAME / username: Username for Atlassian authentication
     - ATLASSIAN_API_TOKEN / api_token: API token for Atlassian authentication
     - POLL_INTERVAL_SECONDS / poll_interval_seconds: Optional, seconds to wait between API polling requests (default: 30)
+    - BACKUP_TARGET_DIRECTORY / backup_target_directory: Optional, the base directory where backup files will be stored.
+      If not provided, backups will be stored in subdirectories named after the instance URL in the current working directory.
     """
     config = configparser.ConfigParser()
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
@@ -73,6 +74,7 @@ def main():
     api_token = get_config_value('ATLASSIAN_API_TOKEN', 'api_token')
     poll_interval_str = get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')
     poll_interval = int(poll_interval_str)
+    backup_target_directory = get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory')
     
     if not all([username, api_token]):
         logging.error(
@@ -90,7 +92,8 @@ def main():
                 url=url, 
                 username=username, 
                 api_token=api_token,
-                poll_interval=poll_interval
+                poll_interval=poll_interval,
+                backup_target_directory=backup_target_directory
             )
             controller.orchestrate()
             success_count += 1
