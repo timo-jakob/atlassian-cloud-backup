@@ -253,7 +253,7 @@ class JiraClient:
         created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
         created_str = created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
         
-        if now - created <= timedelta(hours=24):
+        if now - created <= timedelta(hours=168):
             logging.info('Reusing Jira task %d from %s (local time %s)', 
                         task_id, created_str, created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
                         
