@@ -207,7 +207,7 @@ def _log_download_complete(service_name, filename, bytes_downloaded, start_time)
 def _prepare_range_request(current_expected_on_disk, attempt, max_retries):
     """Return headers dict for HTTP Range requests when resuming downloads."""
     if current_expected_on_disk > 0:
-        logging.info(
+        logging.debug(
             f"Resuming download attempt {attempt + 1}/{max_retries + 1}, starting at byte {current_expected_on_disk}"
         )
         return {'Range': f'bytes={current_expected_on_disk}-'}
