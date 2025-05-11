@@ -253,8 +253,8 @@ class JiraClient:
         created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
         created_str = created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
         
-        if now - created <= timedelta(hours=24):
-            logging.info('Reusing Jira task %d from %s (local time %s)', 
+        if now - created <= timedelta(hours=168):
+            logging.info('Reusing Jira task %d from %s (local time %s) as it is within the weekly interval.', 
                         task_id, created_str, created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
                         
             if self.wait_for_completion(task_id):
