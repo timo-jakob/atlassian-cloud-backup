@@ -14,7 +14,7 @@ DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
 class JiraClient:
     """Client for handling Jira backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None):
+    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, jira_backup_timeout_minutes=None):
         """
         Initialize Jira client.
         
@@ -24,12 +24,14 @@ class JiraClient:
             api_token (str): API token for authentication
             poll_interval (int): Seconds to wait between polling requests
             backup_target_directory (str, optional): Base directory for backups.
+            jira_backup_timeout_minutes (int, optional): Timeout in minutes for Jira backup.
         """
         self.url = url
         self.username = username
         self.api_token = api_token
         self.poll_interval = poll_interval
         self.backup_target_directory = backup_target_directory # Store the directory
+        self.jira_backup_timeout_minutes = jira_backup_timeout_minutes # Store the timeout
         
         # Log the URL being used
         logging.info('Connecting to Jira instance at %s', self.url)
@@ -146,23 +148,27 @@ class JiraClient:
         
         Args:
             task_id (int): Task ID to monitor
-            timeout_minutes (int): Maximum time to wait in minutes before timing out
+            timeout_minutes (int, optional): Maximum time to wait in minutes before timing out.
+                                         If None, uses instance's configured timeout or default.
             
         Returns:
             bool: True if backup completed successfully, False otherwise
         """
-        timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
-        logging.info('Waiting for Jira backup to complete (task %d, timeout: %d minutes)...', task_id, timeout_minutes)
+        # Prioritize timeout passed to this method, then instance config, then global default
+        current_timeout = timeout_minutes if timeout_minutes is not None else self.jira_backup_timeout_minutes
+        current_timeout = current_timeout if current_timeout is not None else DEFAULT_TIMEOUT_MINUTES
+        
+        logging.info('Waiting for Jira backup to complete (task %d, timeout: %d minutes)...', task_id, current_timeout)
         endpoint = '/rest/backup/1/export/getProgress'
         url = f"{self.url.rstrip('/')}{endpoint}"
         
         start_time = datetime.now()
-        timeout_delta = timedelta(minutes=timeout_minutes)
+        timeout_delta = timedelta(minutes=current_timeout)
         
         while True:
             # Check if timeout has been exceeded
             if datetime.now() - start_time > timeout_delta:
-                logging.error(f'Jira backup timed out after {timeout_minutes} minutes')
+                logging.error(f'Jira backup timed out after {current_timeout} minutes')
                 return False
                 
             response = make_authenticated_request(
