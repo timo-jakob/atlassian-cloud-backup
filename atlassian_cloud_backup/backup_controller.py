@@ -44,7 +44,8 @@ class BackupController:
         if self.jira_backup_timeout_minutes is not None:
             logging.info('Jira backup timeout: %d minutes', self.jira_backup_timeout_minutes)
         else:
-            logging.info('Jira backup timeout: Using default value') # Or reference the actual default if known here
+            default_timeout = 480  # Default timeout value in minutes
+            logging.info('Jira backup timeout: Using default value of %d minutes', default_timeout)
         
     def orchestrate(self):
         """
