@@ -55,7 +55,8 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         str: The filename of the downloaded file
         
     Raises:
-        Exception: If download fails after all retries or due to a non-retriable HTTP error.
+        DownloadError: If the download fails after all retries.
+        requests.exceptions.HTTPError: If a non-retriable HTTP error occurs during the download.
     """
     logging.info(f'Starting download for {service_name} backup from: {url} to {filename}')
     
