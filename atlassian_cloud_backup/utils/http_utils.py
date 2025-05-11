@@ -7,6 +7,9 @@ import requests
 from requests.auth import HTTPBasicAuth
 import http.client # For IncompleteRead
 
+class DownloadError(Exception):
+    """Raised when a download fails after all retry attempts."""
+
 def make_authenticated_request(method, url, username, api_token, **kwargs):
     """Make an authenticated HTTP request to Atlassian API.
     
@@ -98,7 +101,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
 
     # This part should ideally not be reached if logic is correct (either success or re-raise)
     logging.error(f"Download for {service_name} failed definitively after all attempts.")
-    raise Exception(f"Download failed for {service_name} after {max_retries + 1} attempts.")
+    raise DownloadError(f"Download failed for {service_name} after {max_retries + 1} attempts.")
 
 def _attempt_download(url, filename, username, api_token, service_name,
                       chunk_size, log_chunk_size,

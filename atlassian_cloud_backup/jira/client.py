@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from atlassian import Jira
-from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
+from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file, DownloadError
 
 # Default timeout of 6 hours (360 minutes), can be overridden with environment variable
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
@@ -229,7 +229,11 @@ class JiraClient:
             str: Path to the downloaded file
         """
         download_url = self.get_download_url(task_id)
-        return download_file(download_url, filename, self.username, self.api_token, "Jira")
+        try:
+            return download_file(download_url, filename, self.username, self.api_token, "Jira")
+        except DownloadError as e:
+            logging.error("Jira backup download failed for task %d: %s", task_id, e)
+            raise RuntimeError(f"Failed to download Jira backup for task {task_id}") from e
     
     def _check_existing_task(self, task_id, now):
         """Check if an existing task can be used for backup.
