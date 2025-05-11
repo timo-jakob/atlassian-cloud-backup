@@ -38,6 +38,7 @@ def main():
     - POLL_INTERVAL_SECONDS / poll_interval_seconds: Optional, seconds to wait between API polling requests (default: 30)
     - BACKUP_TARGET_DIRECTORY / backup_target_directory: Optional, the base directory where backup files will be stored.
       If not provided, backups will be stored in subdirectories named after the instance URL in the current working directory.
+    - JIRA_BACKUP_TIMEOUT_MINUTES / jira_backup_timeout_minutes: Optional, timeout in minutes for Jira backup (default: 480)
     """
     config = configparser.ConfigParser()
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
@@ -75,7 +76,9 @@ def main():
     poll_interval_str = get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')
     poll_interval = int(poll_interval_str)
     backup_target_directory = get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory')
-    
+    jira_backup_timeout_minutes_str = get_config_value('JIRA_BACKUP_TIMEOUT_MINUTES', 'jira_backup_timeout_minutes', '480')
+    jira_backup_timeout_minutes = int(jira_backup_timeout_minutes_str)
+
     if not all([username, api_token]):
         logging.error(
             'Missing ATLASSIAN_USERNAME/username or ATLASSIAN_API_TOKEN/api_token in environment variables or properties file.'
@@ -89,11 +92,12 @@ def main():
         try:
             logging.info('Starting backup for Atlassian instance: %s', url)
             controller = BackupController(
-                url=url, 
-                username=username, 
+                url=url,
+                username=username,
                 api_token=api_token,
                 poll_interval=poll_interval,
-                backup_target_directory=backup_target_directory
+                backup_target_directory=backup_target_directory,
+                jira_backup_timeout_minutes=jira_backup_timeout_minutes
             )
             controller.orchestrate()
             success_count += 1
