@@ -59,87 +59,18 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
             logging.info(f"Found existing partial file: {filename}, size: {bytes_successfully_written_to_disk} bytes. Will attempt to resume.")
 
     for attempt in range(max_retries + 1):
-        current_attempt_start_time = time.time()
-        last_log_time_for_recent_speed = current_attempt_start_time
-        
-        # In case of retry, bytes_successfully_written_to_disk is already updated from previous failed attempt's except block
-        # or from the initial check before the loop.
-        
-        headers = {}
-        file_open_mode = 'wb' # Default to overwrite for a new segment or full download
-        
-        # Effective starting position for this attempt's download stream
-        # This is also the amount of data we expect to be on disk if resuming.
-        current_expected_on_disk = bytes_successfully_written_to_disk
-
-        headers = _prepare_range_request(current_expected_on_disk, attempt, max_retries)
-
         try:
-            response = make_authenticated_request(
-                'GET', url, username, api_token, 
-                stream=True, headers=headers, timeout=30 # timeout for connect and initial response
+            # attempt download and streaming
+            bytes_successfully_written_to_disk = _attempt_download(
+                url, filename, username, api_token, service_name,
+                chunk_size, log_chunk_size,
+                bytes_successfully_written_to_disk, overall_start_time,
+                attempt, max_retries
             )
-
-            # Check how the server responded to our Range request
-            if current_expected_on_disk > 0: # We sent a Range header
-                if response.status_code == 206: # Partial Content - server supports resume
-                    logging.info("Server responded with 206 Partial Content. Appending to existing file.")
-                    file_open_mode = 'ab'
-                elif response.status_code == 200: # OK - server sent the whole file
-                    logging.warning("Server sent 200 OK despite Range request. Restarting download from beginning.")
-                    bytes_successfully_written_to_disk = 0 # Reset, as we are overwriting
-                    current_expected_on_disk = 0
-                    file_open_mode = 'wb'
-                else:
-                    # For other status codes with Range request, make_authenticated_request's raise_for_status would likely have triggered.
-                    # If not, this is an unexpected state. Default to overwrite.
-                    logging.warning(f"Unexpected status {response.status_code} with Range request. Restarting download.")
-                    bytes_successfully_written_to_disk = 0
-                    current_expected_on_disk = 0
-                    file_open_mode = 'wb'
-            else: # Not a range request, so expect 200 OK for a full download
-                file_open_mode = 'wb' # Should already be 'wb'
-                bytes_successfully_written_to_disk = 0 # Ensure this is 0 for a fresh full download
-
-            # bytes_downloaded_this_stream tracks progress for the current response stream
-            bytes_downloaded_this_stream = 0
-            # next_log_threshold_abs is based on total bytes expected on disk
-            next_log_threshold_abs = current_expected_on_disk + log_chunk_size
-            
-            with open(filename, file_open_mode) as f:
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if not chunk:
-                        continue
-                    
-                    f.write(chunk)
-                    bytes_written_in_chunk = len(chunk)
-                    
-                    if file_open_mode == 'wb' and current_expected_on_disk == 0:
-                        # If overwriting, bytes_successfully_written_to_disk tracks from 0 for this stream
-                        bytes_successfully_written_to_disk += bytes_written_in_chunk
-                    elif file_open_mode == 'ab':
-                        # If appending, add to the existing total
-                        bytes_successfully_written_to_disk += bytes_written_in_chunk
-                    # If 'wb' but current_expected_on_disk was >0 (due to server 200 OK), it was reset, so first branch applies.
-
-                    bytes_downloaded_this_stream += bytes_written_in_chunk
-                    current_time = time.time()
-                    
-                    if bytes_successfully_written_to_disk >= next_log_threshold_abs:
-                        _log_download_progress(
-                            service_name,
-                            bytes_successfully_written_to_disk, # Total bytes on disk
-                            current_time,
-                            overall_start_time, # For overall average speed
-                            last_log_time_for_recent_speed, # For recent speed
-                            log_chunk_size # Expected amount for recent speed calculation
-                        )
-                        next_log_threshold_abs += log_chunk_size
-                        last_log_time_for_recent_speed = current_time
-            
-            # If loop completes, this attempt was successful
             logging.info(f"Download attempt {attempt + 1} completed successfully.")
-            _log_download_complete(service_name, filename, bytes_successfully_written_to_disk, overall_start_time)
+            _log_download_complete(
+                service_name, filename, bytes_successfully_written_to_disk, overall_start_time
+            )
             return filename
 
         except (http.client.IncompleteRead, requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
@@ -168,6 +99,65 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
     # This part should ideally not be reached if logic is correct (either success or re-raise)
     logging.error(f"Download for {service_name} failed definitively after all attempts.")
     raise Exception(f"Download failed for {service_name} after {max_retries + 1} attempts.")
+
+def _attempt_download(url, filename, username, api_token, service_name,
+                      chunk_size, log_chunk_size,
+                      current_expected_on_disk, overall_start_time,
+                      attempt, max_retries):
+    """Perform a single download attempt, handling range and streaming."""
+    headers = _prepare_range_request(current_expected_on_disk, attempt, max_retries)
+    response = make_authenticated_request(
+        'GET', url, username, api_token,
+        stream=True, headers=headers, timeout=30
+    )
+    file_open_mode, start_bytes = _handle_range_response(
+        response, current_expected_on_disk
+    )
+    return _stream_response_to_file(
+        response, filename, file_open_mode, start_bytes,
+        chunk_size, log_chunk_size, service_name, overall_start_time
+    )
+
+def _handle_range_response(response, current_expected_on_disk):
+    """Determine file open mode and adjusted start bytes based on response."""
+    if current_expected_on_disk > 0:
+        if response.status_code == 206:
+            logging.info("Server responded with 206 Partial Content. Appending to existing file.")
+            return 'ab', current_expected_on_disk
+        elif response.status_code == 200:
+            logging.warning("Server sent 200 OK despite Range request. Restarting download from beginning.")
+            return 'wb', 0
+        else:
+            logging.warning(f"Unexpected status {response.status_code} with Range request. Restarting download.")
+            return 'wb', 0
+    # fresh download
+    return 'wb', 0
+
+def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, chunk_size, log_chunk_size, service_name, overall_start_time):
+    """Stream response content to file with progress logging, return total bytes written."""
+    bytes_written = initial_bytes
+    last_log_time = time.time()
+    next_log_threshold = bytes_written + log_chunk_size
+
+    with open(filename, file_open_mode) as f:
+        for chunk in response.iter_content(chunk_size=chunk_size):
+            if not chunk:
+                continue
+            f.write(chunk)
+            bytes_written += len(chunk)
+            current_time = time.time()
+            if bytes_written >= next_log_threshold:
+                _log_download_progress(
+                    service_name,
+                    bytes_written,
+                    current_time,
+                    overall_start_time,
+                    last_log_time,
+                    log_chunk_size
+                )
+                next_log_threshold += log_chunk_size
+                last_log_time = current_time
+    return bytes_written
 
 def _log_download_progress(service_name, bytes_downloaded, current_time, start_time, last_log_time, log_chunk_size):
     """Log download progress with speed metrics."""
