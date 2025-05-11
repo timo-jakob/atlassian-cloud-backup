@@ -72,11 +72,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         # This is also the amount of data we expect to be on disk if resuming.
         current_expected_on_disk = bytes_successfully_written_to_disk
 
-        if current_expected_on_disk > 0:
-            headers['Range'] = f'bytes={current_expected_on_disk}-'
-            logging.info(f"Attempt {attempt + 1}/{max_retries + 1}: Requesting range starting from byte {current_expected_on_disk}")
-        else:
-            logging.info(f"Attempt {attempt + 1}/{max_retries + 1}: Starting new download or restarting from beginning.")
+        headers = _prepare_range_request(current_expected_on_disk, attempt, max_retries)
 
         try:
             response = make_authenticated_request(
