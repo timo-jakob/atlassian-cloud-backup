@@ -94,7 +94,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         raise DownloadError(
             f"Download failed for {service_name} after {max_retries + 1} attempts: {e}"
         )
-    logging.info(f"Download completed successfully.")
+    logging.info("Download completed successfully.")
     _log_download_complete(service_name, filename, bytes_written, overall_start_time)
     return filename
 
