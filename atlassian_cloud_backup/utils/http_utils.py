@@ -10,6 +10,14 @@ import http.client # For IncompleteRead
 class DownloadError(Exception):
     """Raised when a download fails after all retry attempts."""
 
+# Exceptions considered retriable for download logic
+RETRIABLE_EXCEPTIONS = (
+    http.client.IncompleteRead,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
+
 def make_authenticated_request(method, url, username, api_token, **kwargs):
     """Make an authenticated HTTP request to Atlassian API.
     
@@ -61,47 +69,59 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         if bytes_successfully_written_to_disk > 0:
             logging.info(f"Found existing partial file: {filename}, size: {bytes_successfully_written_to_disk} bytes. Will attempt to resume.")
 
+    # Define the actual download attempt function
+    def _do_attempt(attempt):
+        return _attempt_download(
+            url, filename, username, api_token, service_name,
+            chunk_size, log_chunk_size,
+            os.path.getsize(filename) if os.path.exists(filename) else 0,
+            overall_start_time,
+            attempt, max_retries
+        )
+    try:
+        bytes_written = _retry_download(
+            _do_attempt, filename, service_name, max_retries, initial_delay_seconds
+        )
+    except requests.exceptions.HTTPError as e:
+        # Non-retriable HTTP error
+        logging.error(
+            f"HTTP error during download for {service_name}: "
+            f"{e.response.status_code} - {e}"
+        )
+        raise
+    except Exception as e:
+        # Wrap any other exception as DownloadError
+        raise DownloadError(
+            f"Download failed for {service_name} after {max_retries + 1} attempts: {e}"
+        )
+    logging.info(f"Download completed successfully.")
+    _log_download_complete(service_name, filename, bytes_written, overall_start_time)
+    return filename
+
+def _retry_download(download_fn, filename, service_name, max_retries, initial_delay_seconds):
+    """Retry a download function with exponential backoff and progress updates."""
+    delay = initial_delay_seconds
     for attempt in range(max_retries + 1):
         try:
-            # attempt download and streaming
-            bytes_successfully_written_to_disk = _attempt_download(
-                url, filename, username, api_token, service_name,
-                chunk_size, log_chunk_size,
-                bytes_successfully_written_to_disk, overall_start_time,
-                attempt, max_retries
+            return download_fn(attempt)
+        except RETRIABLE_EXCEPTIONS as e:
+            logging.warning(
+                f"Download attempt {attempt + 1}/{max_retries + 1} for {service_name} failed: {type(e).__name__} - {e}"
             )
-            logging.info(f"Download attempt {attempt + 1} completed successfully.")
-            _log_download_complete(
-                service_name, filename, bytes_successfully_written_to_disk, overall_start_time
-            )
-            return filename
-
-        except (http.client.IncompleteRead, requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            logging.warning(f"Download attempt {attempt + 1}/{max_retries + 1} for {service_name} failed: {type(e).__name__} - {str(e)}")
-            
-            # Update bytes_successfully_written_to_disk from actual file size before next attempt
-            if os.path.exists(filename):
-                bytes_successfully_written_to_disk = os.path.getsize(filename)
-            else:
-                # This case (file doesn't exist after trying to write) is unlikely but reset to be safe
-                bytes_successfully_written_to_disk = 0
-            
+            # refresh current progress
+            bytes_on_disk = os.path.getsize(filename) if os.path.exists(filename) else 0
             if attempt < max_retries:
-                delay = initial_delay_seconds * (2 ** attempt)
-                logging.info(f"Retrying in {delay} seconds... Current progress: {bytes_successfully_written_to_disk} bytes.")
+                logging.info(
+                    f"Retrying in {delay} seconds... Current progress: {bytes_on_disk} bytes."
+                )
                 time.sleep(delay)
+                delay *= 2
             else:
-                logging.error(f"Max retries reached for {service_name} download. Failed after {max_retries + 1} attempts. Final progress: {bytes_successfully_written_to_disk} bytes.")
-                raise # Re-raise the last caught exception
-        
-        except requests.exceptions.HTTPError as e:
-            # Non-retriable HTTP errors (e.g., 403, 404, 500)
-            logging.error(f"HTTP error during download for {service_name} (Attempt {attempt + 1}): {e.response.status_code} - {e}")
-            raise # Re-raise immediately
-
-    # This part should ideally not be reached if logic is correct (either success or re-raise)
-    logging.error(f"Download for {service_name} failed definitively after all attempts.")
-    raise DownloadError(f"Download failed for {service_name} after {max_retries + 1} attempts.")
+                logging.error(
+                    f"Max retries reached for {service_name} download. "
+                    f"Failed after {max_retries + 1} attempts. Final progress: {bytes_on_disk} bytes."
+                )
+                raise
 
 def _attempt_download(url, filename, username, api_token, service_name,
                       chunk_size, log_chunk_size,
