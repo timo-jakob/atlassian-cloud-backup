@@ -3,6 +3,7 @@
   "extends": [
     "config:recommended"
   ],
+  "enabledManagers": ["pip_requirements"],
   "pip_requirements": {
     "fileMatch": ["^requirements\\.txt$"]
   }
