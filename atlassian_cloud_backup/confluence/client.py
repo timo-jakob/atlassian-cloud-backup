@@ -208,7 +208,7 @@ class ConfluenceClient:
         Returns:
             dict or None: Download details (url and filename) or None if invalid
         """
-        remote_filename = data.get('filename')
+        remote_filename = data.get('fileName')
         if not remote_filename:
             logging.error("No filename found in Confluence backup response")
             return None
