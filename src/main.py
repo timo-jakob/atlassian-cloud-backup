@@ -8,8 +8,8 @@ import sys
 import logging
 import click
 from datetime import datetime
-import configparser # Added import
-from pathlib import Path # Added import
+import configparser  # Added import
+from pathlib import Path  # Added import
 
 from atlassian_cloud_backup import BackupController
 
@@ -20,6 +20,19 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
     stream=sys.stdout
 )
+
+# Module-level config object to be initialized in main
+config = configparser.ConfigParser()
+
+# Module-level helper to retrieve configuration values
+def get_config_value(env_var, prop_key, default=None):
+    """Get a config value from environment or properties file."""
+    value = os.getenv(env_var)
+    if value:
+        return value
+    if 'atlassian' in config and prop_key in config['atlassian']:
+        return config['atlassian'][prop_key]
+    return default
 
 @click.command()
 def main():
@@ -40,7 +53,7 @@ def main():
       If not provided, backups will be stored in subdirectories named after the instance URL in the current working directory.
     - JIRA_BACKUP_TIMEOUT_MINUTES / jira_backup_timeout_minutes: Optional, timeout in minutes for Jira backup (default: 480)
     """
-    config = configparser.ConfigParser()
+    # Initialize properties file
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
     
     if properties_file_path.exists():
@@ -48,15 +61,6 @@ def main():
         logging.info(f"Loaded configuration from {properties_file_path}")
     else:
         logging.info(f"Properties file not found at {properties_file_path}, using environment variables or defaults.")
-
-    # Helper function to get config value
-    def get_config_value(env_var, prop_key, default=None):
-        value = os.getenv(env_var)
-        if value:
-            return value
-        if 'atlassian' in config and prop_key in config['atlassian']:
-            return config['atlassian'][prop_key]
-        return default
 
     # Get instance names
     instance_names = get_config_value('ATLASSIAN_INSTANCES', 'instances', '')
