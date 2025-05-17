@@ -35,7 +35,7 @@ class BackupController:
         
         # Initialize components
         self.jira_client = JiraClient(url, username, api_token, poll_interval, self.backup_target_directory, self.jira_backup_timeout_minutes)
-        self.confluence_client = ConfluenceClient(url, username, api_token, poll_interval)
+        self.confluence_client = ConfluenceClient(url, username, api_token, poll_interval, True, self.backup_target_directory)
         self.file_manager = FileManager(url, backup_target_directory=self.backup_target_directory)
 
         # Log the target directory for backups
@@ -65,9 +65,12 @@ class BackupController:
         # Log last backup times in local timezone
         self._log_last_backup_times(status)
 
-        # Process Jira backup
-        jira_updated = self.jira_client.process_backup(status, now)
-        updated.update(jira_updated)
+        # Process Jira backup (errors should not stop Confluence)
+        try:
+            jira_updated = self.jira_client.process_backup(status, now)
+            updated.update(jira_updated)
+        except Exception as e:
+            logging.error('Jira backup failed: %s', e)
 
         # Process Confluence backup
         confluence_updated = self.confluence_client.process_backup(status, now)
