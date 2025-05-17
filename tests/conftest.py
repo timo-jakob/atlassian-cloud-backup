@@ -6,6 +6,6 @@ src_path = os.path.join(project_root, 'src')
 # Add project root to resolve the 'src' package
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-# Add src directory to resolve the 'atlassian_cloud_backup' package
+# Add src directory to resolve the 'src' package
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
