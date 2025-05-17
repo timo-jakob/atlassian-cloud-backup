@@ -137,7 +137,7 @@ class ConfluenceClient:
             progress = data.get('alternativePercentage', 0)
             logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
             
-            if self._checkCompleteStatus(status, progress):
+            if self._check_complete_status(status, progress):
                 logging.info('Confluence backup completed.')
                 logging.info('Waiting 5 minutes to ensure backup file is available for download...')
                 # time.sleep(5 * 60)
@@ -148,7 +148,7 @@ class ConfluenceClient:
                 
             time.sleep(self.poll_interval)
 
-    def _checkCompleteStatus(self, status, progress):
+    def _check_complete_status(self, status, progress):
         return status == 'COMPLETE' or (status == 'Archiving attachments.' and progress == '100%')
     
     def wait_for_file(self):
@@ -199,7 +199,7 @@ class ConfluenceClient:
             status = data.get('currentStatus', '')
             progress = data.get('alternativePercentage', 0)
             
-            if self._checkCompleteStatus(status, progress):
+            if self._check_complete_status(status, progress):
                 return data
             
             if status in ('FAILED', 'ERROR'):
