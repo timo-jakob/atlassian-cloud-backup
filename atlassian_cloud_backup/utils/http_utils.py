@@ -196,8 +196,8 @@ def _log_download_progress(service_name, bytes_downloaded, current_time, start_t
     recent_speed = recent_bytes / recent_elapsed if recent_elapsed > 0 else 0
     
     msg = f"Downloaded {mb:.2f} MB of {service_name} backup ({speed:.2f} MB/s, current: {recent_speed:.2f} MB/s)"
-    sys.stdout.write('\r' + msg)
-    sys.stdout.flush()
+    progress_logger = logging.getLogger("progress")
+    progress_logger.info(msg, extra={"progress": True})
 
 def _log_download_complete(service_name, filename, bytes_downloaded, start_time):
     """Log completion of download with final statistics."""
