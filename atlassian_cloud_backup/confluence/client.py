@@ -3,6 +3,7 @@
 import os
 import time
 import logging
+import requests  # for HTTPError handling
 from datetime import datetime, timedelta, timezone
 
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
@@ -13,7 +14,7 @@ DEFAULT_TIMEOUT_MINUTES = int(os.getenv('CONFLUENCE_BACKUP_TIMEOUT_MINUTES', 480
 class ConfluenceClient:
     """Client for handling Confluence backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30, include_attachments=True):
+    def __init__(self, url, username, api_token, poll_interval=30, include_attachments=True, backup_target_directory=None):
         """
         Initialize Confluence client.
         
@@ -29,6 +30,7 @@ class ConfluenceClient:
         self.api_token = api_token
         self.poll_interval = poll_interval
         self.include_attachments = include_attachments
+        self.backup_target_directory = backup_target_directory
         
         # Log the URL being used
         logging.info('Connecting to Confluence instance at %s', self.url)
@@ -83,24 +85,26 @@ class ConfluenceClient:
         """Start a new Confluence backup.
         
         Returns:
-            bool: True if the backup was triggered successfully
-        """
+            bool: True if the backup was triggered successfully, False if skipped due to 406."""
         logging.info('Triggering Confluence backup...')
         endpoint = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/runbackup"
         logging.info('Confluence backup endpoint: %s', endpoint)
         
         headers = {
             'Content-Type': 'application/json',
-            'X-Atlassian-Token': 'no-check',
-            'X-Requested-With': 'XMLHttpRequest'
+            'X-Atlassian-Token': 'no-check'
         }
         payload = {'cbAttachments': self.include_attachments}
-        
-        make_authenticated_request(
-            'POST', endpoint, self.username, self.api_token,
-            headers=headers, json=payload
-        )
-        
+        try:
+            make_authenticated_request(
+                'POST', endpoint, self.username, self.api_token,
+                headers=headers, json=payload
+            )
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 406:
+                logging.info('Confluence backup skipped (406 Not Acceptable): %s', e.response.text)
+                return False
+            raise
         logging.info('Confluence backup triggered.')
         return True
 
@@ -133,14 +137,19 @@ class ConfluenceClient:
             progress = data.get('alternativePercentage', 0)
             logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
             
-            if status == 'COMPLETE':
+            if self._checkCompleteStatus(status, progress):
                 logging.info('Confluence backup completed.')
+                logging.info('Waiting 5 minutes to ensure backup file is available for download...')
+                # time.sleep(5 * 60)
                 return True
             elif status in ('FAILED', 'ERROR'):
                 logging.error('Confluence backup failed with status: %s', status)
                 return False
                 
             time.sleep(self.poll_interval)
+
+    def _checkCompleteStatus(self, status, progress):
+        return status == 'COMPLETE' or (status == 'Archiving attachments.' and progress == '100%')
     
     def wait_for_file(self):
         """Wait for Confluence backup to complete and download the file.
@@ -188,8 +197,9 @@ class ConfluenceClient:
             data = response.json()
             
             status = data.get('currentStatus', '')
+            progress = data.get('alternativePercentage', 0)
             
-            if status == 'COMPLETE':
+            if self._checkCompleteStatus(status, progress):
                 return data
             
             if status in ('FAILED', 'ERROR'):
@@ -214,10 +224,10 @@ class ConfluenceClient:
             return None
         
         logging.info("Found Confluence backup filename: %s", remote_filename)
-        download_url = f"{self.url.rstrip('/')}/{remote_filename}"
+        download_url = f"{self.url.rstrip('/')}/wiki/download/{remote_filename}"
         
         from atlassian_cloud_backup.utils.file_utils import FileManager
-        file_manager = FileManager(self.url)
+        file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
         local_filename = file_manager.prepare_backup_path("Confluence")
         
         return {

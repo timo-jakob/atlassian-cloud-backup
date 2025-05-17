@@ -6,6 +6,7 @@ import logging
 import requests
 from requests.auth import HTTPBasicAuth
 import http.client # For IncompleteRead
+import sys
 
 class DownloadError(Exception):
     """Raised when a download fails after all retry attempts."""
@@ -194,14 +195,17 @@ def _log_download_progress(service_name, bytes_downloaded, current_time, start_t
     recent_bytes = log_chunk_size / (1024 * 1024)  # Convert to MB
     recent_speed = recent_bytes / recent_elapsed if recent_elapsed > 0 else 0
     
-    logging.info('Downloaded %.2f MB of %s backup (%.2f MB/s, current: %.2f MB/s)...', 
-                mb, service_name, speed, recent_speed)
+    msg = f"Downloaded {mb:.2f} MB of {service_name} backup ({speed:.2f} MB/s, current: {recent_speed:.2f} MB/s)"
+    sys.stdout.write('\r' + msg)
+    sys.stdout.flush()
 
 def _log_download_complete(service_name, filename, bytes_downloaded, start_time):
     """Log completion of download with final statistics."""
     total_elapsed = time.time() - start_time
     total_mb = bytes_downloaded / (1024 * 1024)
     avg_speed = total_mb / total_elapsed if total_elapsed > 0 else 0
+    # Move to new line after inline progress
+    print()
     logging.info('Downloaded %s backup to %s (%.2f MB in %.1f seconds, avg: %.2f MB/s)', 
                 service_name, filename, total_mb, total_elapsed, avg_speed)
 
