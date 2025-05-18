@@ -133,10 +133,10 @@ class JiraClient:
         except HTTPError as e:
             # Fallback on server error 500: use lastTaskId instead
             if getattr(e, 'response', None) and e.response.status_code == 500:
-                logging.warning('Triggering Jira backup returned HTTP 500, falling back to lastTaskId')
                 time.sleep(5)
                 fallback_task_id = self.fetch_last_task_id()
                 if fallback_task_id is not None:
+                    logging.warning('Triggering Jira backup returned HTTP 500, falling back to lastTaskId: %s', fallback_task_id)
                     return fallback_task_id
             raise
         
