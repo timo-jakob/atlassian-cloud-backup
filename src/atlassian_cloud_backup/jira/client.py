@@ -4,6 +4,7 @@ import os
 import time
 import logging
 from datetime import datetime, timedelta, timezone
+from requests.exceptions import HTTPError
 
 from atlassian import Jira
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file, DownloadError
@@ -47,31 +48,22 @@ class JiraClient:
         Returns:
             dict: Updated backup status
         """
-        updated = {}
-        
         # Fetch and compare Jira task IDs
         server_task_id = self.fetch_last_task_id()
         local_task_id = status.get('jira_task_id')
-        local_file = status.get('jira_file')
 
-        # Skip if we've already processed this task ID
-        if server_task_id is not None and server_task_id == local_task_id and local_file:
-            logging.info('Jira task ID %d already processed in previous run. Skipping Jira backup for %s', 
-                        server_task_id, self.url)
-            return updated
-            
-        if server_task_id != local_task_id:
+        # Check if an existing task can be reused. The `_check_existing_task` method evaluates
+        # the task's age and determines whether it is still valid. If the task is too old or
+        # otherwise invalid, a new backup will be triggered instead.
+        if server_task_id is not None:
             logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
-        
-        # Try to use existing task if it's recent enough
-        if server_task_id:
-            updated.update(self._check_existing_task(server_task_id, now))
-            
-        # Create new backup if needed
-        if not updated:
-            updated.update(self._create_new_backup(now))
-            
-        return updated
+            existing = self._check_existing_task(server_task_id, now)
+            if existing:
+                return existing
+
+        # Create new backup
+        new_backup = self._create_new_backup(now)
+        return new_backup
         
     def fetch_last_task_id(self):
         """Get the ID of the last backup task.
@@ -127,13 +119,27 @@ class JiraClient:
         """
         logging.info('Triggering Jira backup via POST /rest/backup/1/export/runbackup')
         url = f"{self.url.rstrip('/')}/rest/backup/1/export/runbackup"
-        headers = {'Content-Type': 'application/json'}
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        }
         payload = {"cbAttachments": "true", "exportToCloud": "true"}
         
-        response = make_authenticated_request(
-            'POST', url, self.username, self.api_token, 
-            headers=headers, json=payload
-        )
+        try:
+            response = make_authenticated_request(
+                'POST', url, self.username, self.api_token,
+                headers=headers, json=payload
+            )
+        except HTTPError as e:
+            # Fallback on server error 500: use lastTaskId instead
+            if getattr(e, 'response', None) and e.response.status_code == 500:
+                time.sleep(5)
+                fallback_task_id = self.fetch_last_task_id()
+                if fallback_task_id is not None:
+                    logging.warning('Triggering Jira backup returned HTTP 500, falling back to lastTaskId: %s', fallback_task_id)
+                    return fallback_task_id
+            raise
+        
         data = response.json()
         
         task_id = data.get('taskId') or data.get('task_id')
