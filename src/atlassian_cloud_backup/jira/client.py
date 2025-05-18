@@ -52,7 +52,9 @@ class JiraClient:
         server_task_id = self.fetch_last_task_id()
         local_task_id = status.get('jira_task_id')
 
-        # Try reusing existing task if it exists
+        # Check if an existing task can be reused. The `_check_existing_task` method evaluates
+        # the task's age and determines whether it is still valid. If the task is too old or
+        # otherwise invalid, a new backup will be triggered instead.
         if server_task_id is not None:
             logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
             existing = self._check_existing_task(server_task_id, now)
