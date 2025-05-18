@@ -48,12 +48,9 @@ class JiraClient:
         Returns:
             dict: Updated backup status
         """
-        updated = {}
-        
         # Fetch and compare Jira task IDs
         server_task_id = self.fetch_last_task_id()
         local_task_id = status.get('jira_task_id')
-        local_file = status.get('jira_file')
 
         # Try reusing existing task if it exists
         if server_task_id is not None:
