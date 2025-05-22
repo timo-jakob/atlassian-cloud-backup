@@ -71,7 +71,7 @@ class ConfluenceClient:
                     backup_date_str = last_confluence_backup_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
                     logging.info(
                         f"Existing Confluence backup from {backup_date_str} is recent enough "
-                        f"(less than 4 days old). Skipping Confluence backup for {self.url}"
+                        f"(less than or equal to 7 days old). Skipping Confluence backup for {self.url}"
                     )
                     return updated
         
