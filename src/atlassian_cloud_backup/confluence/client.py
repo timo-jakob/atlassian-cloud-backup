@@ -48,7 +48,6 @@ class ConfluenceClient:
         updated = {}
 
         # Check for existing recent local backup
-        local_confluence_file = status.get('confluence_file')
         last_confluence_backup_time = status.get('last_confluence_backup')
 
         if local_confluence_file and last_confluence_backup_time:
