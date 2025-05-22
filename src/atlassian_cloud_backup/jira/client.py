@@ -11,6 +11,7 @@ from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, 
 
 # Default timeout of 6 hours (360 minutes), can be overridden with environment variable
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
+DATEIME_FORMAT_STR = '%Y-%m-%d %H:%M:%S %Z'
 
 class JiraClient:
     """Client for handling Jira backup operations."""
@@ -56,6 +57,22 @@ class JiraClient:
         # the task's age and determines whether it is still valid. If the task is too old or
         # otherwise invalid, a new backup will be triggered instead.
         if server_task_id is not None:
+            if server_task_id == local_task_id:
+                last_backup_time = status.get('last_jira_backup')
+                if last_backup_time and (now - last_backup_time <= timedelta(hours=168)):
+                    
+                    logging.info(
+                        'Jira backup from %s (task %d) is new enough. Skipping new backup.',
+                        last_backup_time.strftime(DATEIME_FORMAT_STR),
+                        local_task_id
+                    )
+                    return status
+                else:
+                    logging.info(
+                        'Local backup for task %d is older than 168 hours or timestamp missing, proceeding to check server task.',
+                        local_task_id
+                    )
+
             logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
             existing = self._check_existing_task(server_task_id, now)
             if existing:
@@ -261,11 +278,11 @@ class JiraClient:
             
         # Convert milliseconds timestamp to datetime
         created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
-        created_str = created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
+        created_str = created.astimezone().strftime(DATEIME_FORMAT_STR)
         
         if now - created <= timedelta(hours=168):
             logging.info('Reusing Jira task %d from %s (local time %s) as it is within the weekly interval.', 
-                        task_id, created_str, created.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
+                        task_id, created_str, created.astimezone().strftime(DATEIME_FORMAT_STR))
                         
             if self.wait_for_completion(task_id):
                 # Wait successful, now download the file
