@@ -56,6 +56,21 @@ class JiraClient:
         # the task's age and determines whether it is still valid. If the task is too old or
         # otherwise invalid, a new backup will be triggered instead.
         if server_task_id is not None:
+            if server_task_id == local_task_id:
+                last_backup_time = status.get('last_jira_backup')
+                if last_backup_time and (now - last_backup_time <= timedelta(hours=168)):
+                    logging.info(
+                        'Jira backup from %s (task %d) is new enough. Skipping new backup.',
+                        last_backup_time.strftime('%Y-%m-%d %H:%M:%S %Z'),
+                        local_task_id
+                    )
+                    return status
+                else:
+                    logging.info(
+                        'Local backup for task %d is older than 168 hours or timestamp missing, proceeding to check server task.',
+                        local_task_id
+                    )
+
             logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
             existing = self._check_existing_task(server_task_id, now)
             if existing:

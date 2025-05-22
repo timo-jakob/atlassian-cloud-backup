@@ -46,6 +46,35 @@ class ConfluenceClient:
             dict: Updated backup status
         """
         updated = {}
+
+        # Check for existing recent local backup
+        local_confluence_file = status.get('confluence_file')
+        last_confluence_backup_time = status.get('last_confluence_backup')
+
+        if local_confluence_file and last_confluence_backup_time:
+            if isinstance(last_confluence_backup_time, str): # Ensure it's a datetime object
+                try:
+                    # Attempt to parse if it's a string (e.g., from a JSON status file)
+                    last_confluence_backup_time = datetime.fromisoformat(last_confluence_backup_time)
+                except ValueError:
+                    logging.warning("Could not parse 'last_confluence_backup' timestamp: %s", last_confluence_backup_time)
+                    # Proceed as if no valid local backup time is found
+                    pass 
+            
+            if isinstance(last_confluence_backup_time, datetime):
+                # Ensure 'now' is offset-aware if 'last_confluence_backup_time' is
+                if last_confluence_backup_time.tzinfo is not None and now.tzinfo is None:
+                    now = now.replace(tzinfo=timezone.utc) # Assuming UTC if 'now' is naive
+
+                backup_age = now - last_confluence_backup_time
+                if backup_age <= timedelta(days=7):
+                    backup_date_str = last_confluence_backup_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
+                    logging.info(
+                        f"Existing Confluence backup from {backup_date_str} is recent enough "
+                        f"(less than 4 days old). Skipping Confluence backup for {self.url}"
+                    )
+                    return updated
+        
         conf_status = self.get_backup_status()
 
         # Skip if Confluence is not available or unlicensed
