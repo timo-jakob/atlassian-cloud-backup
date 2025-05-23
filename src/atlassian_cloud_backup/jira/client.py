@@ -303,7 +303,7 @@ class JiraClient:
         # we might still want to download it with the correct date.
         # This logic branch implies we will re-download if local file is missing or too old, even if task ID matches.
         if (now - server_backup_datetime) <= timedelta(days=7): # Still within acceptable age to download
-            logging.info(f"Jira backup check: Task {task_id} (created at {server_backup_datetime}) is recent. Local file '{local_jira_file}' not reusable (exists: {local_file_exists}). Will attempt to download.")
+            logging.info(f"Jira backup check: Task {task_id} (created at {server_backup_datetime}) is recent. Will attempt to download.")
             try:
                 file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
                 # Use server_backup_datetime for the filename
