@@ -1,9 +1,23 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    ":enablePreCommit"
   ],
-  "python": {
-    "fileMatch": ["requirements\\.txt$"]
-  }
+  "enabledManagers": ["pip_requirements"],
+  "pip_requirements": {
+    "fileMatch": ["(^|/)requirements.*\\.txt$"]
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["pip_requirements"],
+      "addLabels": ["dependencies", "python"]
+    },
+    {
+      "matchManagers": ["pip_requirements"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ],
+  "schedule": ["at any time"]
 }
