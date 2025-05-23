@@ -8,6 +8,7 @@ from requests.exceptions import HTTPError
 
 from atlassian import Jira
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file, DownloadError
+from atlassian_cloud_backup.utils.file_utils import FileManager # Ensure FileManager is imported
 
 # Default timeout of 6 hours (360 minutes), can be overridden with environment variable
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
@@ -74,7 +75,7 @@ class JiraClient:
                     )
 
             logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
-            existing = self._check_existing_task(server_task_id, now)
+            existing = self._check_existing_task(server_task_id, now, status) # Pass status to check_existing_task
             if existing:
                 return existing
 
@@ -258,71 +259,117 @@ class JiraClient:
             logging.error("Jira backup download failed for task %d: %s", task_id, e)
             raise RuntimeError(f"Failed to download Jira backup for task {task_id}") from e
     
-    def _check_existing_task(self, task_id, now):
-        """Check if an existing task can be used for backup.
-        
-        Args:
-            task_id (int): Task ID to check
-            now (datetime): Current datetime
-            
-        Returns:
-            dict: Updated backup status if task is usable, empty dict otherwise
+    def _check_existing_task(self, task_id, now, status): # Added status parameter
         """
-        updated = {}
+        Check if an existing Jira backup task (and its local file) can be reused.
+        Args:
+            task_id (int): The server's last task ID (which matches local task ID).
+            now (datetime): Current UTC datetime.
+            status (dict): Current local backup status.
+        Returns:
+            dict: Backup details if reusable, else empty dict.
+        """
         task_info = self.fetch_task_info(task_id)
+        if not task_info:
+            logging.warning(f"Jira backup check: Could not fetch info for task_id {task_id} to check for reuse.")
+            return {}
+
+        if not task_info.get('result'): 
+            logging.info(f"Jira backup check: Task {task_id} on server is not a completed downloadable backup according to task_info. Status: {task_info.get('status', 'N/A')}, Description: {task_info.get('description', 'N/A')}")
+            return {}
+
         submitted_ms = task_info.get('submitted')
-        
         if not submitted_ms:
-            logging.error('Missing "submitted" timestamp in Jira task %d response: %s', task_id, task_info)
-            raise ValueError(f'Missing "submitted" timestamp in Jira task {task_id} response: {task_info}')
-            
-        # Convert milliseconds timestamp to datetime
-        created = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
-        created_str = created.astimezone().strftime(DATEIME_FORMAT_STR)
+            logging.warning(f"Jira backup check: Task {task_id} has no submission time in its info.")
+            return {}
         
-        if now - created <= timedelta(hours=168):
-            logging.info('Reusing Jira task %d from %s (local time %s) as it is within the weekly interval.', 
-                        task_id, created_str, created.astimezone().strftime(DATEIME_FORMAT_STR))
-                        
-            if self.wait_for_completion(task_id):
-                # Wait successful, now download the file
-                from atlassian_cloud_backup.utils.file_utils import FileManager
-                # Pass the backup_target_directory to FileManager
+        server_backup_datetime = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
+
+        local_jira_file = status.get('jira_file')
+        # Condition for reuse: backup is recent (e.g., within 7 days) AND local file exists
+        if local_jira_file and os.path.exists(local_jira_file) and \
+           (now - server_backup_datetime) <= timedelta(days=7): 
+            
+            logging.info(f"Jira backup check: Conditions met for reusing existing file {local_jira_file} for task ID {task_id} (created at {server_backup_datetime}).")
+            # Even if reusing, we might want to ensure the filename reflects the server_backup_datetime if it differs
+            # For now, we assume the existing local_jira_file is correctly named or its name is acceptable.
+            return {
+                'last_jira_backup': server_backup_datetime, # Use server_backup_datetime as the authoritative time
+                'jira_file': local_jira_file,
+                'jira_task_id': task_id
+            }
+        
+        # If we are not reusing an existing *file*, but the task on server is recent and complete,
+        # we might still want to download it with the correct date.
+        # This logic branch implies we will re-download if local file is missing or too old, even if task ID matches.
+        if (now - server_backup_datetime) <= timedelta(days=7): # Still within acceptable age to download
+            logging.info(f"Jira backup check: Task {task_id} (created at {server_backup_datetime}) is recent. Local file '{local_jira_file}' not reusable (exists: {local_file_exists}). Will attempt to download.")
+            try:
                 file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
-                filename = file_manager.prepare_backup_path("Jira")
+                # Use server_backup_datetime for the filename
+                filename = file_manager.prepare_backup_path("Jira", backup_datetime=server_backup_datetime)
                 
-                download_filename = self.download_backup_file(task_id, filename)
-                updated['last_jira_backup'] = created
-                updated['jira_task_id'] = task_id
-                updated['jira_file'] = download_filename
-        else:
-            logging.info('Existing Jira task %d is older than 24 h (%s), triggering new.', 
-                        task_id, created_str)
-                        
-        return updated
+                downloaded_file = self.download_backup_file(task_id, filename)
+                if downloaded_file:
+                    return {
+                        'last_jira_backup': server_backup_datetime,
+                        'jira_file': downloaded_file,
+                        'jira_task_id': task_id
+                    }
+                else:
+                    logging.warning(f"Jira backup check: Failed to download file for recent task {task_id}.")
+            except Exception as e:
+                logging.error(f"Jira backup check: Error downloading for recent task {task_id}: {e}", exc_info=True)
+        
+        logging.info(f"Jira backup check: Not reusing or re-downloading task {task_id}. Local file: '{local_jira_file}' (exists: {os.path.exists(local_jira_file if local_jira_file else '')}). Server backup time: {server_backup_datetime}. Age: {now - server_backup_datetime}.")
+        return {}
     
     def _create_new_backup(self, now):
-        """Create a new backup.
-        
-        Args:
-            now (datetime): Current datetime
-            
-        Returns:
-            dict: Updated backup status
         """
-        updated = {}
-        new_task_id = self.trigger_backup()
-        
-        if self.wait_for_completion(new_task_id):
-            # Wait successful, now download the file
-            from atlassian_cloud_backup.utils.file_utils import FileManager
-            # Pass the backup_target_directory to FileManager
+        Triggers a new Jira backup, waits for completion, and downloads the file.
+        Returns:
+            dict: Details of the new backup if successful, else empty dict.
+        """
+        try:
+            logging.info("Jira backup: Triggering new backup process.")
+            task_id = self.trigger_backup()
+            
+            if not self.wait_for_completion(task_id):
+                logging.error(f"Jira backup: Task {task_id} did not complete successfully or timed out.")
+                return {}
+
+            # Fetch task info to get the submitted date for the filename
+            task_info = self.fetch_task_info(task_id)
+            submitted_ms = task_info.get('submitted')
+            if not submitted_ms:
+                logging.warning(f"Jira backup: New task {task_id} completed but missing 'submitted' timestamp. Using current time for filename.")
+                backup_datetime_for_filename = now # Fallback to current time
+            else:
+                backup_datetime_for_filename = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
+
             file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
-            filename = file_manager.prepare_backup_path("Jira")
+            # Use the task's submitted datetime for the filename
+            backup_filepath = file_manager.prepare_backup_path("Jira", backup_datetime=backup_datetime_for_filename)
             
-            download_filename = self.download_backup_file(new_task_id, filename)
-            updated['last_jira_backup'] = now
-            updated['jira_task_id'] = new_task_id
-            updated['jira_file'] = download_filename
-            
-        return updated
+            logging.info(f"Jira backup: Task {task_id} completed. Attempting download to {backup_filepath}.")
+            downloaded_file = self.download_backup_file(task_id, backup_filepath)
+
+            if not downloaded_file:
+                logging.error(f"Jira backup: Failed to download file for task {task_id}.")
+                return {}
+
+            logging.info(f"Jira backup: Successfully downloaded {downloaded_file} for task {task_id}.")
+            return {
+                'last_jira_backup': backup_datetime_for_filename, # Use task's submitted time as backup time
+                'jira_file': downloaded_file,
+                'jira_task_id': task_id
+            }
+        except HTTPError as e: 
+            logging.error(f"Jira backup: HTTPError during new backup creation: {e.response.status_code if e.response else 'N/A'} - {e.response.text if e.response else str(e)}", exc_info=True)
+            return {}
+        except DownloadError as e: 
+            logging.error(f"Jira backup: DownloadError during new backup creation: {e}", exc_info=True)
+            return {}
+        except Exception as e:
+            logging.error(f"Jira backup: Unexpected error during new backup creation: {e}", exc_info=True)
+            return {}

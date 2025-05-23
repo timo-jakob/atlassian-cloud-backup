@@ -83,12 +83,21 @@ class FileManager:
             json.dump(to_save, f, indent=2)
         logging.info('Status file updated: %s', status_file)
         
-    def prepare_backup_path(self, service_name, extension='.zip'):
-        """Create folder and return the full backup file path."""
+    def prepare_backup_path(self, service_name, extension='.zip', backup_datetime=None):
+        """Create folder and return the full backup file path.
+        
+        Args:
+            service_name (str): Name of the service (e.g., "Jira", "Confluence").
+            extension (str): File extension for the backup file.
+            backup_datetime (datetime, optional): Specific datetime to use for the filename.
+                                                 If None, current datetime is used.
+        """
         instance_folder = self.get_backup_folder() # This is an absolute path
+        
+        date_str = (backup_datetime or datetime.now()).strftime('%Y-%m-%d')
         
         filename = os.path.join(
             instance_folder, 
-            f"{service_name.lower()}-backup-{datetime.now().strftime('%Y-%m-%d')}{extension}"
+            f"{service_name.lower()}-backup-{date_str}{extension}"
         )
         return filename
