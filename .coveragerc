@@ -1,6 +1,7 @@
 [run]
 # Specify which files to include in coverage
 source = src/atlassian_cloud_backup
+relative_files = True
 
 # Files to omit from coverage
 omit = 

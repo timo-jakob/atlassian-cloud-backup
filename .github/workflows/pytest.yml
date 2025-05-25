@@ -47,8 +47,12 @@ jobs:
     - name: Run Pytest with coverage
       run: |
         source venv/bin/activate
-        # Run tests with coverage and generate XML report for SonarCloud
-        pytest tests/ --cov=src/atlassian_cloud_backup --cov-report=xml:coverage.xml --cov-report=term --junit-xml=test-results.xml
+        # Set PYTHONPATH to ensure proper imports
+        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+        # Run tests with coverage and generate XML report for SonarCloud with relative paths
+        coverage run --source=src/atlassian_cloud_backup -m pytest tests/ --junit-xml=test-results.xml
+        coverage xml -o coverage.xml
+        coverage report --show-missing
 
     - name: SonarCloud Scan
       uses: SonarSource/sonarcloud-github-action@v3.1.0
