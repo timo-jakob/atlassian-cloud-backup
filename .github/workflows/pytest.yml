@@ -53,8 +53,3 @@ jobs:
         coverage run --source=src/atlassian_cloud_backup -m pytest tests/ --junit-xml=test-results.xml
         coverage xml -o coverage.xml
         coverage report --show-missing
-
-    - name: SonarCloud Scan
-      uses: SonarSource/sonarqube-scan-action@v5
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
