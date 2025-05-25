@@ -48,7 +48,7 @@ class JiraClient:
             now (datetime): Current datetime
             
         Returns:
-            dict: Updated backup status
+            dict: Updated backup status with 'jira_action' key indicating the action taken
         """
         # Fetch and compare Jira task IDs
         server_task_id = self.fetch_last_task_id()
@@ -67,7 +67,9 @@ class JiraClient:
                         last_backup_time.strftime(DATEIME_FORMAT_STR),
                         local_task_id
                     )
-                    return status
+                    result = dict(status)
+                    result['jira_action'] = 'REUSED_EXISTING'
+                    return result
                 else:
                     logging.info(
                         'Local backup for task %d is older than 168 hours or timestamp missing, proceeding to check server task.',
@@ -77,10 +79,13 @@ class JiraClient:
             logging.info('Using server task ID %d (local was %s)', server_task_id, local_task_id)
             existing = self._check_existing_task(server_task_id, now, status) # Pass status to check_existing_task
             if existing:
+                existing['jira_action'] = 'REUSED_EXISTING'
                 return existing
 
         # Create new backup
         new_backup = self._create_new_backup(now)
+        if new_backup:
+            new_backup['jira_action'] = 'CREATED_NEW'
         return new_backup
         
     def fetch_last_task_id(self):
@@ -235,8 +240,30 @@ class JiraClient:
         
         data = response.json()
         result = data.get('result')
+        
+        # If no result is available yet, the file creation might still be ongoing
+        # even though lastTaskId indicated completion. Wait for actual completion.
         if not result:
-            raise RuntimeError('No result found in Jira backup response.')
+            logging.warning(
+                'No download URL available for task %d yet. File creation may still be ongoing. '
+                'Waiting for backup to complete...', task_id
+            )
+            
+            # Wait for the backup to truly complete with a download URL available
+            if not self.wait_for_completion(task_id):
+                raise RuntimeError(f'Jira backup task {task_id} failed to complete or timed out while waiting for download URL.')
+            
+            # Retry getting the download URL after waiting for completion
+            response = make_authenticated_request(
+                'GET', url, self.username, self.api_token, 
+                params={'taskId': task_id}
+            )
+            
+            data = response.json()
+            result = data.get('result')
+            
+            if not result:
+                raise RuntimeError(f'No download URL found for Jira backup task {task_id} even after waiting for completion.')
         
         download_url = f"{self.url.rstrip('/')}/plugins/servlet/{result}"
         logging.info('Found Jira backup download URL: %s', download_url)

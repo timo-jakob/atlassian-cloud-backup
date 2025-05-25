@@ -131,13 +131,39 @@ def _attempt_download(url, filename, username, api_token, service_name,
                       attempt, max_retries):
     """Perform a single download attempt, handling range and streaming."""
     headers = _prepare_range_request(current_expected_on_disk, attempt, max_retries)
-    response = make_authenticated_request(
-        'GET', url, username, api_token,
-        stream=True, headers=headers, timeout=30
-    )
-    file_open_mode, start_bytes = _handle_range_response(
-        response, current_expected_on_disk
-    )
+    
+    try:
+        response = make_authenticated_request(
+            'GET', url, username, api_token,
+            stream=True, headers=headers, timeout=30
+        )
+    except requests.exceptions.HTTPError as e:
+        # Handle HTTP 416 Range Not Satisfiable error
+        if e.response.status_code == 416:
+            logging.warning(
+                f"HTTP 416 Range Not Satisfiable error for {service_name} download. "
+                f"Deleting partial file and restarting from beginning."
+            )
+            # Delete the partial file and restart
+            if os.path.exists(filename):
+                os.remove(filename)
+                logging.info(f"Deleted partial file: {filename}")
+            
+            # Retry without range headers (full download)
+            response = make_authenticated_request(
+                'GET', url, username, api_token,
+                stream=True, timeout=30
+            )
+            file_open_mode, start_bytes = 'wb', 0
+        else:
+            # Re-raise other HTTP errors
+            raise
+    else:
+        # Normal response handling
+        file_open_mode, start_bytes = _handle_range_response(
+            response, current_expected_on_disk
+        )
+    
     return _stream_response_to_file(
         response, filename, file_open_mode, start_bytes,
         chunk_size, log_chunk_size, service_name, overall_start_time
@@ -151,6 +177,9 @@ def _handle_range_response(response, current_expected_on_disk):
             return 'ab', current_expected_on_disk
         elif response.status_code == 200:
             logging.warning("Server sent 200 OK despite Range request. Restarting download from beginning.")
+            return 'wb', 0
+        elif response.status_code == 416:
+            logging.warning("Server returned 416 Range Not Satisfiable. The partial file may be corrupted or the server doesn't support resuming. Restarting download from beginning.")
             return 'wb', 0
         else:
             logging.warning(f"Unexpected status {response.status_code} with Range request. Restarting download.")

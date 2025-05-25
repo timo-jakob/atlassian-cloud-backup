@@ -85,22 +85,28 @@ class ConfluenceClient:
             now (datetime): Current datetime
             
         Returns:
-            dict: Updated backup status
+            dict: Updated backup status with 'confluence_action' key indicating the action taken
         """
         if self._should_skip_backup_due_to_recent_local(status, now):
-            return {}
+            return {'confluence_action': 'SKIPPED_RECENT'}
         
         conf_status = self.get_backup_status()
 
         # Skip if Confluence is not available or unlicensed
         if conf_status is None:
             logging.info('Skipping Confluence backup for %s', self.url)
-            return {} # Return empty dict as no update is made
+            return {'confluence_action': 'SKIPPED_UNAVAILABLE'}
         
         if self._can_use_existing_backup(conf_status, now):
-            return self._use_existing_backup(conf_status)
+            result = self._use_existing_backup(conf_status)
+            if result:
+                result['confluence_action'] = 'REUSED_EXISTING'
+            return result
         
-        return self._create_new_backup(now)
+        result = self._create_new_backup(now)
+        if result:
+            result['confluence_action'] = 'CREATED_NEW'
+        return result
     
     def get_backup_status(self):
         """Check if a Confluence backup exists and get its status.
