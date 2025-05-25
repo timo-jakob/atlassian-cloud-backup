@@ -55,6 +55,6 @@ jobs:
         coverage report --show-missing
 
     - name: SonarCloud Scan
-      uses: SonarSource/sonarqube-scan-action@5.2.0
+      uses: SonarSource/sonarqube-scan-action@5
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
