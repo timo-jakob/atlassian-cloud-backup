@@ -1,0 +1,38 @@
+[run]
+# Specify which files to include in coverage
+source = src/atlassian_cloud_backup
+
+# Files to omit from coverage
+omit = 
+    */tests/*
+    */__pycache__/*
+    */venv/*
+    */.venv/*
+    */build/*
+    */dist/*
+    setup.py
+
+[report]
+# Show missing lines in coverage report
+show_missing = True
+
+# Exclude lines from coverage
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == .__main__.:
+    class .*\bProtocol\):
+    @(abc\.)?abstractmethod
+
+[xml]
+# Output file for XML coverage report (used by SonarCloud)
+output = coverage.xml
+
+[html]
+# Directory for HTML coverage report (for local development)
+directory = htmlcov
