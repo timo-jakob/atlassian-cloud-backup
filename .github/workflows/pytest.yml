@@ -61,6 +61,5 @@ jobs:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       with:
         args: >
-          -Dsonar.verbose=true
           -Dsonar.projectKey=timo-jakob_atlassian-cloud-backup
           -Dsonar.organization=timo-jakob-github
