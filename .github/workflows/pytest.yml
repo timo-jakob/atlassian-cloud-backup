@@ -7,7 +7,7 @@ permissions:
 
 on:
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
 
@@ -55,12 +55,6 @@ jobs:
         coverage report --show-missing
 
     - name: SonarCloud Scan
-      uses: SonarSource/sonarcloud-github-action@v3.1.0
+      uses: SonarSource/sonarqube-scan-action@v5
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      with:
-        args: >
-          -Dsonar.verbose=true
-          -Dsonar.projectKey=timo-jakob_atlassian-cloud-backup
-          -Dsonar.organization=timo-jakob-github
