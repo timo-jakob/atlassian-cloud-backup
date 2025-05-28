@@ -190,40 +190,100 @@ class ConfluenceClient:
         """
         timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
         logging.info('Monitoring Confluence backup progress (timeout: %d minutes)...', timeout_minutes)
-        url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
         
+        url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
         start_time = datetime.now()
         timeout_delta = timedelta(minutes=timeout_minutes)
         
         while True:
-            # Check if timeout has been exceeded
-            if datetime.now() - start_time > timeout_delta:
+            if self._is_timeout_exceeded(start_time, timeout_delta):
                 logging.error(f'Confluence backup timed out after {timeout_minutes} minutes')
-                return None if return_data else False
+                return self._get_timeout_return_value(return_data)
                 
-            response = make_authenticated_request('GET', url, self.username, self.api_token)
-            data = response.json()
-            
+            data = self._get_backup_status_data(url)
             status = data.get('currentStatus', '')
             progress = data.get('alternativePercentage', 0)
             
-            if not return_data:
-                logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
+            self._log_backup_progress(status, progress, return_data)
             
-            if self._check_complete_status(status, progress):
-                if not return_data:
-                    logging.info('Confluence backup completed.')
-                    logging.info('Waiting 5 minutes to ensure backup file is available for download...')
-                    # time.sleep(5 * 60)
-                return data if return_data else True
-            elif status in ('FAILED', 'ERROR'):
-                logging.error('Confluence backup failed with status: %s', status)
-                return None if return_data else False
-            
-            if return_data:
-                logging.info('Backup not yet complete (status: %s), waiting...', status)
+            backup_result = self._evaluate_backup_status(status, progress, data, return_data)
+            if backup_result is not None:
+                return backup_result
                 
             time.sleep(self.poll_interval)
+    
+    def _is_timeout_exceeded(self, start_time, timeout_delta):
+        """Check if the backup operation has timed out.
+        
+        Args:
+            start_time (datetime): When the backup monitoring started
+            timeout_delta (timedelta): Maximum allowed duration
+            
+        Returns:
+            bool: True if timeout has been exceeded
+        """
+        return datetime.now() - start_time > timeout_delta
+    
+    def _get_timeout_return_value(self, return_data):
+        """Get the appropriate return value when timeout occurs.
+        
+        Args:
+            return_data (bool): Whether to return data or boolean
+            
+        Returns:
+            None or False: Appropriate timeout return value
+        """
+        return None if return_data else False
+    
+    def _get_backup_status_data(self, url):
+        """Fetch backup status data from the API.
+        
+        Args:
+            url (str): API endpoint URL
+            
+        Returns:
+            dict: Backup status data
+        """
+        response = make_authenticated_request('GET', url, self.username, self.api_token)
+        return response.json()
+    
+    def _log_backup_progress(self, status, progress, return_data):
+        """Log backup progress information.
+        
+        Args:
+            status (str): Current backup status
+            progress (int): Backup progress percentage
+            return_data (bool): Whether data will be returned
+        """
+        if not return_data:
+            logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
+        elif status not in ('COMPLETE', 'FAILED', 'ERROR'):
+            logging.info('Backup not yet complete (status: %s), waiting...', status)
+    
+    def _evaluate_backup_status(self, status, progress, data, return_data):
+        """Evaluate backup status and determine if monitoring should continue.
+        
+        Args:
+            status (str): Current backup status
+            progress (int): Backup progress percentage
+            data (dict): Full backup status data
+            return_data (bool): Whether to return data or boolean
+            
+        Returns:
+            bool, dict, None, or None: Return value if status is final, None if should continue
+        """
+        if self._check_complete_status(status, progress):
+            if not return_data:
+                logging.info('Confluence backup completed.')
+                logging.info('Waiting 5 minutes to ensure backup file is available for download...')
+                # time.sleep(5 * 60)
+            return data if return_data else True
+        elif status in ('FAILED', 'ERROR'):
+            logging.error('Confluence backup failed with status: %s', status)
+            return None if return_data else False
+        
+        # Continue monitoring
+        return None
 
     def _check_complete_status(self, status, progress):
         return status == 'COMPLETE' or (status == 'Archiving attachments.' and progress == '100%')
