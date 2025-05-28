@@ -103,10 +103,30 @@ class ConfluenceClient:
                 result['confluence_action'] = 'REUSED_EXISTING'
             return result
         
-        result = self._create_new_backup(now)
-        if result:
-            result['confluence_action'] = 'CREATED_NEW'
-        return result
+        status = conf_status.get('currentStatus', '')
+        progress = conf_status.get('alternativePercentage', 0)
+        
+        if self._check_complete_status(status, progress):
+            # Backup is already complete, use it
+            logging.info('Confluence backup is already complete (status: %s, progress: %s). Using existing backup.', status, progress)
+            result = self._use_existing_backup(conf_status)
+            if result:
+                result['confluence_action'] = 'REUSED_EXISTING'
+            return result
+        elif self._is_backup_in_progress(status):
+            # Backup is in progress, wait for it to complete then use it
+            logging.info('Confluence backup is in progress (status: %s, progress: %s). Waiting for completion.', status, progress)
+            result = self._wait_for_existing_backup(conf_status, now)
+            if result:
+                result['confluence_action'] = 'WAITED_FOR_EXISTING'
+            return result
+        else:
+            # No backup in progress, trigger a new one
+            logging.info('Confluence backup is not running (status: %s, progress: %s). Creating new backup.', status, progress)
+            result = self._create_new_backup(now)
+            if result:
+                result['confluence_action'] = 'CREATED_NEW'
+            return result
     
     def get_backup_status(self):
         """Check if a Confluence backup exists and get its status.
@@ -158,14 +178,15 @@ class ConfluenceClient:
         logging.info('Confluence backup triggered.')
         return True
 
-    def wait_for_completion(self, timeout_minutes=None):
+    def wait_for_completion(self, timeout_minutes=None, return_data=False):
         """Wait until a Confluence backup completes, with timeout.
         
         Args:
             timeout_minutes (int): Maximum time to wait in minutes before timing out
+            return_data (bool): If True, return the backup data dict; if False, return bool
             
         Returns:
-            bool: True if backup completed successfully, False otherwise
+            bool or dict: Success status (bool) or backup data (dict) if return_data=True
         """
         timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
         logging.info('Monitoring Confluence backup progress (timeout: %d minutes)...', timeout_minutes)
@@ -178,28 +199,90 @@ class ConfluenceClient:
             # Check if timeout has been exceeded
             if datetime.now() - start_time > timeout_delta:
                 logging.error(f'Confluence backup timed out after {timeout_minutes} minutes')
-                return False
+                return None if return_data else False
                 
             response = make_authenticated_request('GET', url, self.username, self.api_token)
             data = response.json()
             
             status = data.get('currentStatus', '')
             progress = data.get('alternativePercentage', 0)
-            logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
+            
+            if not return_data:
+                logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
             
             if self._check_complete_status(status, progress):
-                logging.info('Confluence backup completed.')
-                logging.info('Waiting 5 minutes to ensure backup file is available for download...')
-                # time.sleep(5 * 60)
-                return True
+                if not return_data:
+                    logging.info('Confluence backup completed.')
+                    logging.info('Waiting 5 minutes to ensure backup file is available for download...')
+                    # time.sleep(5 * 60)
+                return data if return_data else True
             elif status in ('FAILED', 'ERROR'):
                 logging.error('Confluence backup failed with status: %s', status)
-                return False
+                return None if return_data else False
+            
+            if return_data:
+                logging.info('Backup not yet complete (status: %s), waiting...', status)
                 
             time.sleep(self.poll_interval)
 
     def _check_complete_status(self, status, progress):
         return status == 'COMPLETE' or (status == 'Archiving attachments.' and progress == '100%')
+    
+    def _is_backup_in_progress(self, status):
+        """Check if a backup is currently in progress on the server.
+        
+        Args:
+            status (str): Current backup status from server
+            
+        Returns:
+            bool: True if backup is in progress
+        """
+        # Statuses that indicate a backup is actively running
+        in_progress_statuses = [
+            'RUNNING', 'STARTED', 'PROGRESS', 'CREATING', 'ARCHIVING',
+            'Archiving attachments.', 'WORKING', 'PROCESSING'
+        ]
+        return status in in_progress_statuses or (
+            status and status not in ('COMPLETE', 'FAILED', 'ERROR', 'IDLE', 'NONE', '')
+        )
+    
+    def _wait_for_existing_backup(self, conf_status, now):
+        """Wait for an existing backup in progress to complete and use it.
+        
+        Args:
+            conf_status (dict): Current backup status from server
+            now (datetime): Current datetime
+            
+        Returns:
+            dict: Updated backup status
+        """
+        logging.info('Waiting for existing Confluence backup to complete...')
+        
+        # Wait for the existing backup to complete
+        backup_data = self.wait_for_completion(timeout_minutes=DEFAULT_TIMEOUT_MINUTES, return_data=True)
+        if not backup_data:
+            # If waiting failed, fall back to creating a new backup
+            logging.warning('Failed to wait for existing backup, creating new one')
+            return self._create_new_backup(now)
+        
+        # Use the completed backup
+        updated = {}
+        conf_file = self.wait_for_file()
+        if conf_file:
+            # Use the server's backup timestamp if available, otherwise use now
+            conf_time = backup_data.get('time')
+            if conf_time:
+                try:
+                    conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
+                    updated['last_confluence_backup'] = conf_timestamp
+                except (ValueError, TypeError):
+                    updated['last_confluence_backup'] = now
+            else:
+                updated['last_confluence_backup'] = now
+            updated['confluence_file'] = conf_file
+            logging.info('Successfully waited for and downloaded existing Confluence backup')
+            
+        return updated
     
     def wait_for_file(self):
         """Wait for Confluence backup to complete and download the file.
@@ -210,7 +293,7 @@ class ConfluenceClient:
         logging.info('Waiting for Confluence backup file...')
         
         # Wait for the backup to be ready and get its data
-        backup_data = self._wait_for_complete_status()
+        backup_data = self.wait_for_completion(timeout_minutes=DEFAULT_TIMEOUT_MINUTES, return_data=True)
         if not backup_data:
             return None
             
@@ -221,43 +304,6 @@ class ConfluenceClient:
             
         # Download the file
         return self._download_backup_file(download_details)
-    
-    def _wait_for_complete_status(self, timeout_minutes=None):
-        """Wait until the Confluence backup status is complete, with timeout.
-        
-        Args:
-            timeout_minutes (int): Maximum time to wait in minutes before timing out
-            
-        Returns:
-            dict or None: Backup data if complete, None if failed
-        """
-        timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
-        url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
-        
-        start_time = datetime.now()
-        timeout_delta = timedelta(minutes=timeout_minutes)
-        
-        while True:
-            # Check if timeout has been exceeded
-            if datetime.now() - start_time > timeout_delta:
-                logging.error(f'Confluence backup status check timed out after {timeout_minutes} minutes')
-                return None
-                
-            response = make_authenticated_request('GET', url, self.username, self.api_token)
-            data = response.json()
-            
-            status = data.get('currentStatus', '')
-            progress = data.get('alternativePercentage', 0)
-            
-            if self._check_complete_status(status, progress):
-                return data
-            
-            if status in ('FAILED', 'ERROR'):
-                logging.error('Confluence backup failed with status: %s', status)
-                return None
-            
-            logging.info('Backup not yet complete (status: %s), waiting...', status)
-            time.sleep(self.poll_interval)
     
     def _get_download_details(self, data):
         """Extract download URL and local filename from backup data.

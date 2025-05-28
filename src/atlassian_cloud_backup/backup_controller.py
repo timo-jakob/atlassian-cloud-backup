@@ -101,8 +101,9 @@ class BackupController:
             if confluence_action in ('SKIPPED_RECENT', 'SKIPPED_UNAVAILABLE'):
                 reason = 'Recent backup exists' if confluence_action == 'SKIPPED_RECENT' else 'Service unavailable'
                 self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), reason)
-            elif confluence_action == 'REUSED_EXISTING':
-                self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), 'Reused existing backup')
+            elif confluence_action in ('REUSED_EXISTING', 'WAITED_FOR_EXISTING'):
+                reason = 'Reused existing backup' if confluence_action == 'REUSED_EXISTING' else 'Waited for existing backup'
+                self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), reason)
             elif confluence_action == 'CREATED_NEW':
                 self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file))
 

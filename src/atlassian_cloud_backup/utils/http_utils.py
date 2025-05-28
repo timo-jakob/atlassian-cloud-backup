@@ -19,6 +19,11 @@ RETRIABLE_EXCEPTIONS = (
     requests.exceptions.Timeout,
 )
 
+# Download retry configuration
+MAX_DOWNLOAD_RETRIES = 15
+INITIAL_RETRY_DELAY_SECONDS = 1
+RETRY_DELAY_MULTIPLIER = 2  # Exponential backoff multiplier (delay sequence: 1s, 2s, 4s, 8s, 16s, 32s, ... up to ~9 hours total)
+
 def make_authenticated_request(method, url, username, api_token, **kwargs):
     """Make an authenticated HTTP request to Atlassian API.
     
@@ -61,8 +66,6 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
     """
     logging.info(f'Starting download for {service_name} backup from: {url} to {filename}')
     
-    max_retries = 5
-    initial_delay_seconds = 1
     overall_start_time = time.time()
 
     bytes_successfully_written_to_disk = 0
@@ -78,11 +81,11 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
             chunk_size, log_chunk_size,
             os.path.getsize(filename) if os.path.exists(filename) else 0,
             overall_start_time,
-            attempt, max_retries
+            attempt, MAX_DOWNLOAD_RETRIES
         )
     try:
         bytes_written = _retry_download(
-            _do_attempt, filename, service_name, max_retries, initial_delay_seconds
+            _do_attempt, filename, service_name, MAX_DOWNLOAD_RETRIES, INITIAL_RETRY_DELAY_SECONDS
         )
     except requests.exceptions.HTTPError as e:
         # Non-retriable HTTP error
@@ -94,7 +97,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
     except Exception as e:
         # Wrap any other exception as DownloadError
         raise DownloadError(
-            f"Download failed for {service_name} after {max_retries + 1} attempts: {e}"
+            f"Download failed for {service_name} after {MAX_DOWNLOAD_RETRIES + 1} attempts: {e}"
         )
     logging.info("Download completed successfully.")
     _log_download_complete(service_name, filename, bytes_written, overall_start_time)
@@ -117,7 +120,7 @@ def _retry_download(download_fn, filename, service_name, max_retries, initial_de
                     f"Retrying in {delay} seconds... Current progress: {bytes_on_disk} bytes."
                 )
                 time.sleep(delay)
-                delay *= 2
+                delay *= RETRY_DELAY_MULTIPLIER
             else:
                 logging.error(
                     f"Max retries reached for {service_name} download. "
