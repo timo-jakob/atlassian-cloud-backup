@@ -255,10 +255,12 @@ class ConfluenceClient:
             progress (int): Backup progress percentage
             return_data (bool): Whether data will be returned
         """
-        if not return_data:
-            logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
-        elif status not in ('COMPLETE', 'FAILED', 'ERROR'):
-            logging.info('Backup not yet complete (status: %s), waiting...', status)
+        if status not in ('COMPLETE', 'FAILED', 'ERROR'):
+            # Always show progress when available, regardless of return_data mode
+            if progress and str(progress) != '0':
+                logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
+            else:
+                logging.info('Confluence backup status: %s', status)
     
     def _evaluate_backup_status(self, status, progress, data, return_data):
         """Evaluate backup status and determine if monitoring should continue.
