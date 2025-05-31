@@ -12,6 +12,7 @@ import configparser  # Added import
 from pathlib import Path  # Added import
 
 from atlassian_cloud_backup import BackupController
+from atlassian_cloud_backup.utils.file_utils import FileManager
 
 # Configure logging to stdout
 logging.basicConfig(
