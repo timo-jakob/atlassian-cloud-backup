@@ -83,7 +83,7 @@ class FileManager:
         try:
             raw_data = self._load_status_file(status_file)
             return self._convert_datetime_strings_to_objects(raw_data)
-        except (json.JSONDecodeError, Exception) as e:
+        except Exception as e:
             logging.warning('Error loading consolidated status file %s: %s', status_file, e)
             return {}
     
