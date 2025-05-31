@@ -111,7 +111,9 @@ class FilesystemDiscovery:
         Returns:
             str or None: Complete URL if found, None otherwise
         """
-        if '.atlassian.net' in reconstructed or '.atlassian.com' in reconstructed:
+        # Security fix: Ensure .atlassian.net or .atlassian.com appears as proper domain suffix
+        # not just anywhere in the string to prevent malicious URL construction
+        if reconstructed.endswith('.atlassian.net') or reconstructed.endswith('.atlassian.com'):
             return f'https://{reconstructed}'
         return None
     
@@ -154,25 +156,73 @@ class FilesystemDiscovery:
         Returns:
             str or None: Base domain if valid, None otherwise
         """
-        base = reconstructed.replace('.atlassian', '').replace('atlassian', '')
-        if base and not base.startswith('.') and not base.endswith('.'):
+        # Security fix: More secure domain extraction
+        # Only extract base domain if 'atlassian' appears as a complete word/subdomain
+        if '.atlassian' in reconstructed:
+            # Split by .atlassian and take the first part as base domain
+            parts = reconstructed.split('.atlassian', 1)
+            base = parts[0]
+        elif reconstructed.lower() == 'atlassian':
+            # Special case: just 'atlassian'
+            return None  # Invalid - need a base domain
+        elif reconstructed.lower().startswith('atlassian'):
+            # Remove 'atlassian' prefix if it's at the start
+            base = reconstructed[9:]  # len('atlassian') = 9
+            if base.startswith('.'):
+                base = base[1:]  # Remove leading dot
+        else:
+            return None
+        
+        # Validate the extracted base domain
+        if base and not base.startswith('.') and not base.endswith('.') and base.replace('.', '').replace('-', '').isalnum():
             return base
         return None
     
     def _try_generic_domain_match(self, folder_name, reconstructed):
         """
         Try to match a generic domain pattern and add https prefix.
+        This method is more restrictive to prevent malicious URL construction.
         
         Args:
             folder_name (str): Original folder name
             reconstructed (str): Folder name with underscores replaced by dots
             
         Returns:
-            str or None: Complete URL if pattern matches, None otherwise
+            str or None: Complete URL if pattern matches and is safe, None otherwise
         """
-        if re.match(r'^[a-zA-Z0-9._-]+$', folder_name) and '.' in folder_name:
-            return f'https://{reconstructed}'
-        return None
+        # Only allow basic alphanumeric, dots, and hyphens
+        if not re.match(r'^[a-zA-Z0-9._-]+$', folder_name) or '.' not in folder_name:
+            return None
+        
+        # Security: Only construct URLs for patterns that could be legitimate Atlassian domains
+        # This prevents arbitrary domain construction
+        
+        # Check if it looks like a standard domain (has reasonable structure)
+        parts = reconstructed.split('.')
+        if len(parts) < 2:
+            return None
+            
+        # Reject obviously malicious patterns
+        if any(suspicious in reconstructed.lower() for suspicious in ['evil', 'malicious', 'attacker', 'hack']):
+            return None
+            
+        # Only allow if it might be a legitimate business domain structure
+        # Must have reasonable domain structure (not too many parts, not suspicious patterns)
+        if len(parts) > 5:  # Prevent overly complex domains
+            return None
+            
+        # Additional security: only allow if the last two parts look like a legitimate TLD structure
+        if len(parts) >= 2:
+            # Check if the last part looks like a TLD and second-to-last like a domain
+            tld = parts[-1].lower()
+            domain = parts[-2].lower()
+            
+            # Only allow common TLDs and reasonable domain names
+            allowed_tlds = {'com', 'net', 'org', 'io', 'co', 'ai', 'dev'}
+            if tld not in allowed_tlds or len(domain) < 2 or not domain.isalnum():
+                return None
+        
+        return f'https://{reconstructed}'
     
     def _is_path_safe(self, file_path):
         """

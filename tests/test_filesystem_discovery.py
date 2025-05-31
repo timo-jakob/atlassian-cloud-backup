@@ -286,6 +286,52 @@ class TestFilesystemDiscovery:
         assert not discovery.verify_discovered_site(None, folder_name)
         assert not discovery.verify_discovered_site("https://wrong.com", folder_name)
     
+    def test_url_reconstruction_security_fix(self):
+        """Test that malicious URL patterns are properly rejected (security fix for line 114)."""
+        discovery = FilesystemDiscovery(self.temp_dir)
+        
+        # Test cases that should be rejected to prevent URL manipulation attacks
+        malicious_cases = [
+            # .atlassian.net appears but not as proper domain suffix
+            "malicious.com.atlassian.net.evil.com",
+            "evil.atlassian.net.malicious.com", 
+            "bad.atlassian.net.attacker.example",
+            # Similar attacks with .atlassian.com
+            "malicious.com.atlassian.com.evil.com",
+            "bad.atlassian.com.attacker.example",
+            # Subdomain confusion attempts
+            "atlassian.net.evil.com",
+            "atlassian.com.evil.com",
+            "fake-atlassian.net.evil.com",
+            # Path-like attempts
+            "some.domain/atlassian.net",
+            "example.com/redirect/atlassian.net",
+        ]
+        
+        for malicious_folder in malicious_cases:
+            result = discovery._reconstruct_url_from_folder_name(malicious_folder)
+            # These should either return None (rejected) or if they return a URL,
+            # it should be properly sanitized and not contain the malicious parts
+            if result is not None:
+                # If a URL is returned, it should be a proper https://something.atlassian.net/com format
+                assert result.startswith("https://"), f"Malicious case should not produce invalid URL: {malicious_folder} -> {result}"
+                assert result.endswith(".atlassian.net") or result.endswith(".atlassian.com"), f"Result should end with proper Atlassian domain: {malicious_folder} -> {result}"
+                # Should not contain the malicious parts
+                assert ".evil.com" not in result, f"Malicious domain should not appear in result: {malicious_folder} -> {result}"
+                assert ".attacker.example" not in result, f"Malicious domain should not appear in result: {malicious_folder} -> {result}"
+                assert ".malicious.com" not in result, f"Malicious domain should not appear in result: {malicious_folder} -> {result}"
+        
+        # Test that legitimate cases still work
+        legitimate_cases = [
+            ("mycompany.atlassian.net", "https://mycompany.atlassian.net"),
+            ("test.atlassian.com", "https://test.atlassian.com"),
+            ("company_name.atlassian.net", "https://company.name.atlassian.net"),
+        ]
+        
+        for folder_name, expected_url in legitimate_cases:
+            result = discovery._reconstruct_url_from_folder_name(folder_name)
+            assert result == expected_url, f"Legitimate case should work: {folder_name} -> {result} (expected: {expected_url})"
+    
     def test_get_backup_statistics(self):
         """Test backup statistics generation."""
         discovery = FilesystemDiscovery(self.temp_dir)
