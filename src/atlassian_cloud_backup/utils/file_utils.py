@@ -72,20 +72,24 @@ class FileManager:
     def load_consolidated_status(self):
         """Load consolidated backup status from JSON file.
         
+        If the consolidated status file doesn't exist, attempts to discover
+        existing backup files and reconstruct the status.
+        
         Returns:
             dict: Consolidated status with site URLs as top-level keys
         """
         status_file = self.get_consolidated_status_file()
         
         if not os.path.isfile(status_file):
-            return {}
+            return self._discover_and_create_consolidated_status()
         
         try:
             raw_data = self._load_status_file(status_file)
             return self._convert_datetime_strings_to_objects(raw_data)
         except Exception as e:
             logging.warning('Error loading consolidated status file %s: %s', status_file, e)
-            return {}
+            logging.info('Attempting filesystem discovery as fallback')
+            return self._discover_and_create_consolidated_status()
     
     def _load_status_file(self, status_file):
         """Load raw JSON data from status file.
@@ -98,6 +102,37 @@ class FileManager:
         """
         with open(status_file, 'r') as f:
             return json.load(f)
+    
+    def _discover_and_create_consolidated_status(self):
+        """Discover existing backup files and create consolidated status.
+        
+        Returns:
+            dict: Discovered consolidated status
+        """
+        # Import here to avoid circular imports
+        from atlassian_cloud_backup.utils.filesystem_discovery import FilesystemDiscovery
+        
+        discovery = FilesystemDiscovery(self.backup_target_directory)
+        discovered_status = discovery.discover_sites_and_backups()
+        
+        if discovered_status:
+            # Log discovery statistics
+            stats = discovery.get_backup_statistics(discovered_status)
+            logging.info('Filesystem discovery found %d sites with %d total backup files', 
+                        stats['total_sites'], stats['total_backup_files'])
+            
+            if stats['oldest_backup'] and stats['newest_backup']:
+                logging.info('Backup date range: %s to %s', 
+                           stats['oldest_backup'].strftime('%Y-%m-%d'),
+                           stats['newest_backup'].strftime('%Y-%m-%d'))
+            
+            # Save the discovered status to avoid future discovery overhead
+            logging.info('Saving discovered status to consolidated status file')
+            self.save_consolidated_status(discovered_status)
+        else:
+            logging.info('No existing backup files found during filesystem discovery')
+        
+        return discovered_status
     
     def _convert_datetime_strings_to_objects(self, data):
         """Convert datetime strings back to datetime objects for all sites.
