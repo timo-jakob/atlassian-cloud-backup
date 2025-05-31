@@ -167,7 +167,7 @@ class FilesystemDiscovery:
             return None  # Invalid - need a base domain
         elif reconstructed.lower().startswith('atlassian'):
             # Remove 'atlassian' prefix if it's at the start
-            base = reconstructed[9:]  # len('atlassian') = 9
+            base = reconstructed[9:]
             if base.startswith('.'):
                 base = base[1:]  # Remove leading dot
         else:
