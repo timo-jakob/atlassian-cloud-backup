@@ -702,7 +702,7 @@ class FilesystemDiscovery:
             if entry.isreg():
                 total_size_archive += entry.size
                 
-                if not self._validate_entry_compression_ratio(tar_file, entry, threshold_ratio, file_path):
+                if not self._validate_entry_compression_ratio(entry, threshold_ratio, file_path):
                     return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
         
         return {'is_safe': True, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
@@ -743,7 +743,7 @@ class FilesystemDiscovery:
             return False
         return True
 
-    def _validate_entry_compression_ratio(self, tar_file, entry, threshold_ratio, file_path):
+    def _validate_entry_compression_ratio(self, entry, threshold_ratio, file_path):
         """
         Validate entry for TAR files. 
         
@@ -752,7 +752,6 @@ class FilesystemDiscovery:
         overall file size limits and entry count limits for tar bomb protection.
         
         Args:
-            tar_file: Open TarFile object
             entry: TarInfo object for the entry to validate
             threshold_ratio (int): Maximum allowed compression ratio (unused for TAR)
             file_path (str): Path to the file being checked (for logging)
