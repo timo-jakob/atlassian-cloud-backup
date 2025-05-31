@@ -60,19 +60,15 @@ def test_no_individual_status_files():
         
         if individual_status_files:
             print(f"❌ Found unexpected individual status files: {individual_status_files}")
-            return False
+            assert not individual_status_files, "Unexpected individual status files found."
         else:
             print("✅ No individual status files found (expected)")
         
         # Verify consolidated status can be loaded
         loaded_status = fm.load_consolidated_status()
-        if site_url in loaded_status:
-            print("✅ Consolidated status loaded successfully")
-            print(f"   Site data keys: {list(loaded_status[site_url].keys())}")
-            return True
-        else:
-            print("❌ Failed to load consolidated status")
-            return False
+        assert site_url in loaded_status, "Failed to load consolidated status for the site."
+        print("✅ Consolidated status loaded successfully")
+        print(f"   Site data keys: {list(loaded_status[site_url].keys())}")
 
 if __name__ == "__main__":
     success = test_no_individual_status_files()
