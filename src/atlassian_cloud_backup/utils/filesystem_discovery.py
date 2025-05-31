@@ -599,70 +599,170 @@ class FilesystemDiscovery:
             bool: True if the file appears safe, False if it looks like a tar bomb
         """
         try:
-            total_size_archive = 0
-            total_entry_archive = 0
+            # Scan all entries in the tar file for bomb characteristics
+            scan_result = self._scan_tar_entries(tar_file, file_path, threshold_entries, threshold_size, threshold_ratio)
             
-            for entry in tar_file:
-                total_entry_archive += 1
-                
-                # Check entry count threshold - too many entries can lead to inode exhaustion
-                if total_entry_archive > threshold_entries:
-                    logging.warning('Backup file rejected: too many entries (%d > %d), potential tar bomb: %s', 
-                                  total_entry_archive, threshold_entries, file_path)
-                    return False
-                
-                # Check total size first to avoid processing huge files
-                if total_size_archive > threshold_size:
-                    logging.warning('Backup file rejected: uncompressed size too large (%d > %d), potential tar bomb: %s', 
-                                  total_size_archive, threshold_size, file_path)
-                    return False
-                
-                # Only process regular files (not directories, links, etc.)
-                if entry.isreg():
-                    # Add the declared size to our total
-                    total_size_archive += entry.size
-                    
-                    # For compression ratio check, we'll sample the file rather than reading it entirely
-                    # This prevents the bomb from being triggered while still detecting suspicious ratios
-                    try:
-                        file_obj = tar_file.extractfile(entry)
-                        if file_obj is None:
-                            continue
-                        
-                        # Sample the first few chunks to check for suspicious expansion
-                        chunk_size = 1024
-                        max_sample_chunks = 10  # Only sample first 10KB
-                        size_read = 0
-                        
-                        for i in range(max_sample_chunks):
-                            chunk = file_obj.read(chunk_size)
-                            if not chunk:
-                                break
-                            size_read += len(chunk)
-                        
-                        # If we read significantly more than expected for the sample, that's suspicious
-                        # For a normal file, reading 10KB should not expand to much more than that
-                        if size_read > 0 and entry.size > 0:
-                            # Calculate how much the sample expanded compared to declared size
-                            sample_ratio = (size_read / min(entry.size, max_sample_chunks * chunk_size))
-                            if sample_ratio > threshold_ratio:
-                                logging.warning('Backup file rejected: suspicious expansion ratio (%.2f > %d) for entry %s, potential tar bomb: %s', 
-                                              sample_ratio, threshold_ratio, entry.name, file_path)
-                                return False
-                            
-                    except Exception as e:
-                        # If we can't read the file for validation, that's suspicious
-                        logging.warning('Backup file rejected: unable to validate entry %s (%s), potential tar bomb: %s', 
-                                      entry.name, str(e), file_path)
-                        return False
-            
-            logging.debug('TAR file passed bomb detection: %d entries, %d total size, file: %s', 
-                         total_entry_archive, total_size_archive, file_path)
-            return True
+            if scan_result['is_safe']:
+                logging.debug('TAR file passed bomb detection: %d entries, %d total size, file: %s', 
+                             scan_result['total_entries'], scan_result['total_size'], file_path)
+                return True
+            else:
+                return False
             
         except Exception as e:
             logging.warning('Error during tar bomb detection for %s: %s (treating as suspicious)', file_path, str(e))
             return False
+
+    def _scan_tar_entries(self, tar_file, file_path, threshold_entries, threshold_size, threshold_ratio):
+        """
+        Scan all entries in a tar file and check for bomb characteristics.
+        
+        Args:
+            tar_file: Open TarFile object
+            file_path (str): Path to the file being checked (for logging)
+            threshold_entries (int): Maximum allowed number of entries
+            threshold_size (int): Maximum allowed uncompressed size
+            threshold_ratio (int): Maximum allowed compression ratio
+            
+        Returns:
+            dict: Dictionary with scan results including 'is_safe', 'total_entries', 'total_size'
+        """
+        total_size_archive = 0
+        total_entry_archive = 0
+        
+        for entry in tar_file:
+            total_entry_archive += 1
+            
+            # Check entry count threshold
+            if not self._check_entry_count_threshold(total_entry_archive, threshold_entries, file_path):
+                return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+            
+            # Check total size threshold
+            if not self._check_total_size_threshold(total_size_archive, threshold_size, file_path):
+                return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+            
+            # Process regular files for compression ratio validation
+            if entry.isreg():
+                total_size_archive += entry.size
+                
+                if not self._validate_entry_compression_ratio(tar_file, entry, threshold_ratio, file_path):
+                    return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+        
+        return {'is_safe': True, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+
+    def _check_entry_count_threshold(self, total_entries, threshold_entries, file_path):
+        """
+        Check if the entry count exceeds the threshold.
+        
+        Args:
+            total_entries (int): Current total number of entries
+            threshold_entries (int): Maximum allowed number of entries
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if within threshold, False if exceeded
+        """
+        if total_entries > threshold_entries:
+            logging.warning('Backup file rejected: too many entries (%d > %d), potential tar bomb: %s', 
+                          total_entries, threshold_entries, file_path)
+            return False
+        return True
+
+    def _check_total_size_threshold(self, total_size, threshold_size, file_path):
+        """
+        Check if the total uncompressed size exceeds the threshold.
+        
+        Args:
+            total_size (int): Current total uncompressed size
+            threshold_size (int): Maximum allowed uncompressed size
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if within threshold, False if exceeded
+        """
+        if total_size > threshold_size:
+            logging.warning('Backup file rejected: uncompressed size too large (%d > %d), potential tar bomb: %s', 
+                          total_size, threshold_size, file_path)
+            return False
+        return True
+
+    def _validate_entry_compression_ratio(self, tar_file, entry, threshold_ratio, file_path):
+        """
+        Validate the compression ratio of a single tar entry by sampling its content.
+        
+        Args:
+            tar_file: Open TarFile object
+            entry: TarInfo object for the entry to validate
+            threshold_ratio (int): Maximum allowed compression ratio
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if compression ratio is safe, False if suspicious
+        """
+        try:
+            file_obj = tar_file.extractfile(entry)
+            if file_obj is None:
+                return True
+            
+            # Sample the file content to check for suspicious expansion
+            sample_data = self._sample_file_content(file_obj)
+            
+            # Validate the compression ratio based on the sample
+            return self._check_compression_ratio(entry, sample_data, threshold_ratio, file_path)
+            
+        except Exception as e:
+            logging.warning('Backup file rejected: unable to validate entry %s (%s), potential tar bomb: %s', 
+                          entry.name, str(e), file_path)
+            return False
+
+    def _sample_file_content(self, file_obj):
+        """
+        Sample the first few chunks of a file to check for suspicious expansion.
+        
+        Args:
+            file_obj: File-like object to sample from
+            
+        Returns:
+            dict: Dictionary with 'size_read' indicating how much data was read
+        """
+        chunk_size = 1024
+        max_sample_chunks = 10  # Only sample first 10KB
+        size_read = 0
+        
+        for i in range(max_sample_chunks):
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                break
+            size_read += len(chunk)
+        
+        return {'size_read': size_read}
+
+    def _check_compression_ratio(self, entry, sample_data, threshold_ratio, file_path):
+        """
+        Check if the compression ratio based on sampled data is within acceptable limits.
+        
+        Args:
+            entry: TarInfo object for the entry being checked
+            sample_data (dict): Dictionary with sampled data information
+            threshold_ratio (int): Maximum allowed compression ratio
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if ratio is acceptable, False if suspicious
+        """
+        size_read = sample_data['size_read']
+        
+        if size_read > 0 and entry.size > 0:
+            # Calculate how much the sample expanded compared to declared size
+            max_sample_size = 10 * 1024  # 10KB
+            sample_ratio = (size_read / min(entry.size, max_sample_size))
+            
+            if sample_ratio > threshold_ratio:
+                logging.warning('Backup file rejected: suspicious expansion ratio (%.2f > %d) for entry %s, potential tar bomb: %s', 
+                              sample_ratio, threshold_ratio, entry.name, file_path)
+                return False
+        
+        return True
 
     def _is_path_safe(self, file_path):
         """
