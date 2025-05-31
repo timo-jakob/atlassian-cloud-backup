@@ -3,6 +3,8 @@
 import os
 import re
 import logging
+import zipfile
+import tarfile
 from datetime import datetime, time
 from atlassian_cloud_backup.utils.file_utils import sanitize_folder_name
 
@@ -116,6 +118,43 @@ class FilesystemDiscovery:
         
         return None
     
+    def _validate_backup_file(self, file_path, extension):
+        """
+        Validate that a backup file is not corrupted by attempting to list its contents.
+        
+        Args:
+            file_path (str): Path to the backup file
+            extension (str): File extension (zip or tar.gz)
+            
+        Returns:
+            bool: True if the file appears to be valid, False if corrupted
+        """
+        try:
+            if extension == 'zip':
+                with zipfile.ZipFile(file_path, 'r') as zip_file:
+                    # Try to list the contents - this will fail if the ZIP is corrupted
+                    zip_file.namelist()
+                    return True
+            elif extension == 'tar.gz':
+                with tarfile.open(file_path, 'r:gz') as tar_file:
+                    # Try to list the contents - this will fail if the tar.gz is corrupted
+                    tar_file.getnames()
+                    return True
+            else:
+                # Unknown extension, assume it's valid for now
+                logging.warning('Unknown backup file extension: %s for file %s', extension, file_path)
+                return True
+                
+        except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as e:
+            logging.warning('Backup file appears to be corrupted and will be ignored: %s (error: %s)', 
+                          file_path, str(e))
+            return False
+        except Exception as e:
+            # Catch any other unexpected errors
+            logging.warning('Error validating backup file %s: %s (treating as corrupted)', 
+                          file_path, str(e))
+            return False
+    
     def _discover_site_backups(self, site_dir):
         """
         Discover backup files in a site's directory.
@@ -152,6 +191,11 @@ class FilesystemDiscovery:
                 service = match.group(1).lower()
                 date_str = match.group(2)
                 extension = match.group(3)
+                
+                # Validate the backup file before processing it
+                if not self._validate_backup_file(file_path, extension):
+                    # File is corrupted, skip it (warning already logged in validation method)
+                    continue
                 
                 try:
                     # Parse the date and create a datetime object with 00:00:00 time
