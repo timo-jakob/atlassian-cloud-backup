@@ -59,8 +59,9 @@ class BackupController:
         Returns:
             bool: True if at least one backup was performed
         """
-        # Load current backup status
-        status = self.file_manager.load_status()
+        # Load current backup status from consolidated file
+        consolidated_status = self.file_manager.load_consolidated_status()
+        status = consolidated_status.get(self.url, {})
         now = datetime.now(timezone.utc)
         updated = {}
 
@@ -78,7 +79,8 @@ class BackupController:
         # Save updates if any changes were made
         if updated:
             merged = {**status, **updated}
-            self.file_manager.save_status(merged)
+            # Update consolidated status file
+            self.file_manager.update_site_in_consolidated_status(merged)
             return True
         
         return False

@@ -12,6 +12,7 @@ import configparser  # Added import
 from pathlib import Path  # Added import
 
 from atlassian_cloud_backup import BackupController
+from atlassian_cloud_backup.utils.file_utils import FileManager
 
 # Configure logging to stdout
 logging.basicConfig(
@@ -90,6 +91,11 @@ def main():
         sys.exit(1)
     
     logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
+    
+    # Log information about the consolidated status file
+    temp_fm = FileManager(urls[0], backup_target_directory=backup_target_directory)
+    consolidated_status_file = temp_fm.get_consolidated_status_file()
+    logging.info('Backup status will be saved to: %s', consolidated_status_file)
     
     success_count = 0
     for url in urls:

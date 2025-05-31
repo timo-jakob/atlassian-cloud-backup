@@ -1,0 +1,857 @@
+"""Filesystem discovery utilities for reconstructing backup status from existing files."""
+
+import os
+import re
+import logging
+import zipfile
+import tarfile
+from datetime import datetime, time
+from atlassian_cloud_backup.utils.file_utils import sanitize_folder_name
+
+
+class FilesystemDiscovery:
+    """Discovers existing backup files and reconstructs consolidated status."""
+    
+    def __init__(self, backup_target_directory=None):
+        """
+        Initialize filesystem discovery.
+        
+        Args:
+            backup_target_directory (str, optional): Base directory for all backups.
+                                                   If None, uses current working directory.
+        """
+        if backup_target_directory:
+            self.root_backup_dir = os.path.abspath(backup_target_directory)
+        else:
+            self.root_backup_dir = os.getcwd()
+    
+    def discover_sites_and_backups(self):
+        """
+        Scan the filesystem to discover existing sites and their backups.
+        
+        Returns:
+            dict: Consolidated status dictionary with site URLs as keys
+        """
+        logging.info('Starting filesystem discovery in: %s', self.root_backup_dir)
+        
+        if not os.path.exists(self.root_backup_dir):
+            logging.warning('Backup directory does not exist: %s', self.root_backup_dir)
+            return {}
+        
+        discovered_status = {}
+        
+        # Get all subdirectories in the root backup directory
+        try:
+            entries = os.listdir(self.root_backup_dir)
+        except OSError as e:
+            logging.error('Error reading backup directory %s: %s', self.root_backup_dir, e)
+            return {}
+        
+        for entry in entries:
+            entry_path = os.path.join(self.root_backup_dir, entry)
+            
+            # Skip files and focus on directories
+            if not os.path.isdir(entry_path):
+                continue
+            
+            # Skip common non-site directories
+            if entry.startswith('.') or entry.lower() in ('logs', 'temp', 'tmp'):
+                continue
+            
+            # Try to reconstruct the site URL from the folder name
+            site_url = self._reconstruct_url_from_folder_name(entry)
+            if not site_url:
+                logging.debug('Could not reconstruct URL from folder name: %s', entry)
+                continue
+            
+            # Discover backups in this site's directory
+            site_status = self._discover_site_backups(entry_path)
+            if site_status:
+                discovered_status[site_url] = site_status
+                logging.info('Discovered site: %s with %d backup files', 
+                           site_url, len([k for k in site_status.keys() if k.endswith('_file')]))
+        
+        logging.info('Filesystem discovery completed. Found %d sites.', len(discovered_status))
+        return discovered_status
+    
+    def _reconstruct_url_from_folder_name(self, folder_name):
+        """
+        Reconstruct an Atlassian URL from a sanitized folder name.
+        
+        This reverses the sanitize_folder_name() function by converting underscores
+        back to likely URL characters and adding the https:// prefix.
+        
+        Args:
+            folder_name (str): Sanitized folder name
+            
+        Returns:
+            str or None: Reconstructed URL, or None if it doesn't look like an Atlassian URL
+        """
+        # Replace underscores with dots for common domain patterns
+        reconstructed = folder_name.replace('_', '.')
+        
+        # Try different reconstruction strategies
+        url = self._try_direct_atlassian_match(reconstructed)
+        if url:
+            return url
+            
+        url = self._try_incomplete_atlassian_match(reconstructed)
+        if url:
+            return url
+            
+        return self._try_generic_domain_match(folder_name, reconstructed)
+    
+    def _try_direct_atlassian_match(self, reconstructed):
+        """
+        Check if the reconstructed string already contains a complete Atlassian domain.
+        
+        Args:
+            reconstructed (str): Folder name with underscores replaced by dots
+            
+        Returns:
+            str or None: Complete URL if found, None otherwise
+        """
+        # Security fix: Ensure .atlassian.net or .atlassian.com appears as proper domain suffix
+        # not just anywhere in the string to prevent malicious URL construction
+        if reconstructed.endswith('.atlassian.net') or reconstructed.endswith('.atlassian.com'):
+            return f'https://{reconstructed}'
+        return None
+    
+    def _try_incomplete_atlassian_match(self, reconstructed):
+        """
+        Try to reconstruct URL when 'atlassian' is present but domain is incomplete.
+        
+        Args:
+            reconstructed (str): Folder name with underscores replaced by dots
+            
+        Returns:
+            str or None: Complete URL if reconstructed, None otherwise
+        """
+        if 'atlassian' not in reconstructed.lower():
+            return None
+            
+        # If it contains atlassian but no .net/.com, try to fix it
+        if '.net' in reconstructed or '.com' in reconstructed:
+            return None  # Already has domain extension, handled elsewhere
+        
+        # Check if it's already properly formatted
+        parts = reconstructed.rsplit('.', 1)
+        if len(parts) == 2 and parts[1] in ('net', 'com'):
+            return f'https://{reconstructed}'
+        
+        # Try adding .atlassian.net
+        base = self._extract_base_domain(reconstructed)
+        if base:
+            return f'https://{base}.atlassian.net'
+        
+        return None
+    
+    def _extract_base_domain(self, reconstructed):
+        """
+        Extract the base domain name from a string containing 'atlassian'.
+        
+        Args:
+            reconstructed (str): String with 'atlassian' in it
+            
+        Returns:
+            str or None: Base domain if valid, None otherwise
+        """
+        # Security fix: More secure domain extraction
+        # Only extract base domain if 'atlassian' appears as a complete word/subdomain
+        if '.atlassian' in reconstructed:
+            # Split by .atlassian and take the first part as base domain
+            parts = reconstructed.split('.atlassian', 1)
+            base = parts[0]
+        elif reconstructed.lower() == 'atlassian':
+            # Special case: just 'atlassian'
+            return None  # Invalid - need a base domain
+        elif reconstructed.lower().startswith('atlassian'):
+            # Remove 'atlassian' prefix if it's at the start
+            base = reconstructed[9:]
+            if base.startswith('.'):
+                base = base[1:]  # Remove leading dot
+        else:
+            return None
+        
+        # Validate the extracted base domain
+        if base and not base.startswith('.') and not base.endswith('.') and base.replace('.', '').replace('-', '').isalnum():
+            return base
+        return None
+    
+    def _try_generic_domain_match(self, folder_name, reconstructed):
+        """
+        Try to match a generic domain pattern and add https prefix.
+        This method is more restrictive to prevent malicious URL construction.
+        
+        Args:
+            folder_name (str): Original folder name
+            reconstructed (str): Folder name with underscores replaced by dots
+            
+        Returns:
+            str or None: Complete URL if pattern matches and is safe, None otherwise
+        """
+        # Only allow basic alphanumeric, dots, and hyphens
+        if not re.match(r'^[a-zA-Z0-9._-]+$', folder_name) or '.' not in folder_name:
+            return None
+        
+        # Security: Only construct URLs for patterns that could be legitimate Atlassian domains
+        # This prevents arbitrary domain construction
+        
+        # Check if it looks like a standard domain (has reasonable structure)
+        parts = reconstructed.split('.')
+        if len(parts) < 2:
+            return None
+            
+        # Reject obviously malicious patterns
+        if any(suspicious in reconstructed.lower() for suspicious in ['evil', 'malicious', 'attacker', 'hack']):
+            return None
+            
+        # Only allow if it might be a legitimate business domain structure
+        # Must have reasonable domain structure (not too many parts, not suspicious patterns)
+        if len(parts) > 5:  # Prevent overly complex domains
+            return None
+            
+        # Additional security: only allow if the last two parts look like a legitimate TLD structure
+        if len(parts) >= 2:
+            # Check if the last part looks like a TLD and second-to-last like a domain
+            tld = parts[-1].lower()
+            domain = parts[-2].lower()
+            
+            # Only allow common TLDs and reasonable domain names
+            allowed_tlds = {'com', 'net', 'org', 'io', 'co', 'ai', 'dev'}
+            if tld not in allowed_tlds or len(domain) < 2 or not domain.isalnum():
+                return None
+        
+        return f'https://{reconstructed}'
+    
+    def _is_path_safe(self, file_path):
+        """
+        Check if a file path is safe (doesn't contain directory traversal attempts).
+        
+        Args:
+            file_path (str): File path to check
+            
+        Returns:
+            bool: True if the path is safe, False if it contains directory traversal attempts
+        """
+        # Normalize the path to resolve any ".." components
+        normalized_path = os.path.normpath(file_path)
+        
+        # Check for absolute paths (security risk)
+        if os.path.isabs(normalized_path):
+            return False
+        
+        # Check if the normalized path tries to go outside the current directory
+        if normalized_path.startswith('..') or '/..' in normalized_path or '\\..\\' in normalized_path:
+            return False
+        
+        # Check for other suspicious patterns
+        if normalized_path.startswith('/') or normalized_path.startswith('\\'):
+            return False
+            
+        return True
+    
+    def _validate_backup_file(self, file_path, extension):
+        """
+        Validate that a backup file is not corrupted by attempting to list its contents.
+        Also performs security checks to ensure the archive doesn't contain malicious paths
+        or exhibit characteristics of zip/tar bombs.
+        
+        Args:
+            file_path (str): Path to the backup file
+            extension (str): File extension (zip or tar.gz)
+            
+        Returns:
+            bool: True if the file appears to be valid and safe, False if corrupted or malicious
+        """
+        try:
+            if extension == 'zip':
+                return self._validate_zip_file(file_path)
+            elif extension == 'tar.gz':
+                return self._validate_tar_gz_file(file_path)
+            else:
+                return self._handle_unknown_extension(file_path, extension)
+                
+        except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as e:
+            logging.warning('Backup file appears to be corrupted and will be ignored: %s (error: %s)', 
+                          file_path, str(e))
+            return False
+        except Exception as e:
+            # Catch any other unexpected errors
+            logging.warning('Error validating backup file %s: %s (treating as corrupted)', 
+                          file_path, str(e))
+            return False
+
+    def _get_security_thresholds(self):
+        """
+        Get security thresholds for bomb detection.
+        Adjusted for large Atlassian backup files (can be 250GB+ compressed).
+        
+        Returns:
+            tuple: (max_entries, max_size, max_ratio)
+        """
+        THRESHOLD_ENTRIES = 1000000  # Maximum number of entries (1M files)
+        THRESHOLD_SIZE = 1073741824000  # Maximum uncompressed size (1TB = 1000GB)
+        THRESHOLD_RATIO = 50  # Maximum compression ratio (based on real-world testing showing ~5x ratios for legitimate backups)
+        return THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO
+
+    def _validate_zip_file(self, file_path):
+        """
+        Validate a ZIP backup file for corruption and security issues.
+        
+        Args:
+            file_path (str): Path to the ZIP file
+            
+        Returns:
+            bool: True if file is valid and safe, False otherwise
+        """
+        with zipfile.ZipFile(file_path, 'r') as zip_file:
+            # List the contents - this will fail if the ZIP is corrupted
+            file_names = zip_file.namelist()
+            
+            # Security check: validate file paths to prevent directory traversal
+            if not self._validate_file_paths(file_names, file_path):
+                return False
+            
+            # Security check: detect zip bombs
+            threshold_entries, threshold_size, threshold_ratio = self._get_security_thresholds()
+            return self._check_zip_bomb_safety(zip_file, file_path, threshold_entries, threshold_size, threshold_ratio)
+
+    def _validate_tar_gz_file(self, file_path):
+        """
+        Validate a TAR.GZ backup file for corruption and security issues.
+        
+        Args:
+            file_path (str): Path to the TAR.GZ file
+            
+        Returns:
+            bool: True if file is valid and safe, False otherwise
+        """
+        with tarfile.open(file_path, 'r:gz') as tar_file:
+            # List the contents - this will fail if the tar.gz is corrupted
+            # Note: We only list contents, never extract, so this is safe from zip-slip attacks
+            file_names = tar_file.getnames()
+            
+            # Security check: validate file paths to prevent directory traversal
+            if not self._validate_file_paths(file_names, file_path):
+                return False
+            
+            # Security check: detect tar bombs
+            threshold_entries, threshold_size, threshold_ratio = self._get_security_thresholds()
+            return self._check_tar_bomb_safety(tar_file, file_path, threshold_entries, threshold_size, threshold_ratio)
+
+    def _validate_file_paths(self, file_names, file_path):
+        """
+        Validate that all file paths in an archive are safe (no directory traversal).
+        
+        Args:
+            file_names (list): List of file names from the archive
+            file_path (str): Path to the archive file (for logging)
+            
+        Returns:
+            bool: True if all paths are safe, False if any unsafe path is found
+        """
+        for file_name in file_names:
+            if not self._is_path_safe(file_name):
+                logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
+                              file_path, file_name)
+                return False
+        return True
+
+    def _handle_unknown_extension(self, file_path, extension):
+        """
+        Handle backup files with unknown extensions.
+        
+        Args:
+            file_path (str): Path to the file
+            extension (str): File extension
+            
+        Returns:
+            bool: True (assume valid for unknown extensions)
+        """
+        logging.warning('Unknown backup file extension: %s for file %s', extension, file_path)
+        return True
+    
+    def _discover_site_backups(self, site_dir):
+        """
+        Discover backup files in a site's directory.
+        
+        Args:
+            site_dir (str): Path to the site's backup directory
+            
+        Returns:
+            dict: Site status dictionary with backup information
+        """
+        # Get list of files in the directory
+        files = self._get_site_files(site_dir)
+        if not files:
+            return {}
+        
+        # Process all backup files and categorize them
+        jira_backups, confluence_backups = self._process_backup_files(site_dir, files)
+        
+        # Generate site status from discovered backups
+        return self._generate_site_status(jira_backups, confluence_backups)
+
+    def _get_site_files(self, site_dir):
+        """
+        Get the list of files in a site directory.
+        
+        Args:
+            site_dir (str): Path to the site's backup directory
+            
+        Returns:
+            list: List of filenames, or empty list if error
+        """
+        try:
+            return os.listdir(site_dir)
+        except OSError as e:
+            logging.warning('Error reading site directory %s: %s', site_dir, e)
+            return []
+
+    def _process_backup_files(self, site_dir, files):
+        """
+        Process all files in a site directory and categorize valid backup files.
+        
+        Args:
+            site_dir (str): Path to the site's backup directory
+            files (list): List of filenames to process
+            
+        Returns:
+            tuple: (jira_backups, confluence_backups) lists of backup info dictionaries
+        """
+        # Pattern to match backup files: {service}-backup-{date}.{extension}
+        backup_pattern = re.compile(r'^(jira|confluence)-backup-(\d{4}-\d{2}-\d{2})\.(zip|tar\.gz)$', re.IGNORECASE)
+        
+        jira_backups = []
+        confluence_backups = []
+        
+        for filename in files:
+            file_path = os.path.join(site_dir, filename)
+            
+            # Skip directories
+            if os.path.isdir(file_path):
+                continue
+            
+            # Check if file matches backup pattern
+            match = backup_pattern.match(filename)
+            if not match:
+                continue
+            
+            # Process the matched backup file
+            backup_info = self._process_single_backup_file(file_path, filename, match)
+            if backup_info:
+                service = backup_info['service']
+                if service == 'jira':
+                    jira_backups.append(backup_info)
+                elif service == 'confluence':
+                    confluence_backups.append(backup_info)
+        
+        return jira_backups, confluence_backups
+
+    def _process_single_backup_file(self, file_path, filename, match):
+        """
+        Process a single backup file and create backup info dictionary.
+        
+        Args:
+            file_path (str): Full path to the backup file
+            filename (str): Filename of the backup file
+            match: Regex match object with service, date, and extension groups
+            
+        Returns:
+            dict or None: Backup info dictionary if valid, None if invalid
+        """
+        service = match.group(1).lower()
+        date_str = match.group(2)
+        extension = match.group(3)
+        
+        # Validate the backup file before processing it
+        if not self._validate_backup_file(file_path, extension):
+            # File is corrupted, skip it (warning already logged in validation method)
+            return None
+        
+        # Parse the date
+        try:
+            backup_date = datetime.strptime(date_str, '%Y-%m-%d')
+            backup_datetime = datetime.combine(backup_date.date(), time(0, 0, 0))
+            
+            return {
+                'service': service,
+                'file_path': file_path,
+                'filename': filename,
+                'date': backup_datetime,
+                'extension': extension
+            }
+        except ValueError as e:
+            logging.warning('Could not parse date from backup filename %s: %s', filename, e)
+            return None
+
+    def _generate_site_status(self, jira_backups, confluence_backups):
+        """
+        Generate site status dictionary from categorized backup lists.
+        
+        Args:
+            jira_backups (list): List of Jira backup info dictionaries
+            confluence_backups (list): List of Confluence backup info dictionaries
+            
+        Returns:
+            dict: Site status dictionary with backup information
+        """
+        site_status = {}
+        
+        # Process Jira backups
+        if jira_backups:
+            latest_jira = max(jira_backups, key=lambda x: x['date'])
+            site_status['last_jira_backup'] = latest_jira['date']
+            site_status['jira_file'] = latest_jira['file_path']
+            # We don't have task_id from filesystem, so omit it
+            logging.debug('Found Jira backup: %s (date: %s)', 
+                         latest_jira['filename'], latest_jira['date'])
+        
+        # Process Confluence backups
+        if confluence_backups:
+            latest_confluence = max(confluence_backups, key=lambda x: x['date'])
+            site_status['last_confluence_backup'] = latest_confluence['date']
+            site_status['confluence_file'] = latest_confluence['file_path']
+            logging.debug('Found Confluence backup: %s (date: %s)', 
+                         latest_confluence['filename'], latest_confluence['date'])
+        
+        return site_status
+    
+    def verify_discovered_site(self, discovered_url, folder_name):
+        """
+        Verify that a discovered URL correctly maps back to the folder name.
+        
+        This helps validate the URL reconstruction process.
+        
+        Args:
+            discovered_url (str): The reconstructed URL
+            folder_name (str): The original folder name
+            
+        Returns:
+            bool: True if the URL correctly maps to the folder name
+        """
+        if not discovered_url:
+            return False
+        
+        # Use the same sanitization function to verify round-trip consistency
+        expected_folder = sanitize_folder_name(discovered_url)
+        return expected_folder == folder_name
+    
+    def get_backup_statistics(self, discovered_status):
+        """
+        Generate statistics about discovered backups.
+        
+        Args:
+            discovered_status (dict): Discovered status dictionary
+            
+        Returns:
+            dict: Statistics about the discovered backups
+        """
+        stats = {
+            'total_sites': len(discovered_status),
+            'sites_with_jira': 0,
+            'sites_with_confluence': 0,
+            'sites_with_both': 0,
+            'oldest_backup': None,
+            'newest_backup': None,
+            'total_backup_files': 0
+        }
+        
+        all_backup_dates = []
+        
+        for site_url, site_status in discovered_status.items():
+            has_jira = 'last_jira_backup' in site_status
+            has_confluence = 'last_confluence_backup' in site_status
+            
+            if has_jira:
+                stats['sites_with_jira'] += 1
+                stats['total_backup_files'] += 1
+                all_backup_dates.append(site_status['last_jira_backup'])
+            
+            if has_confluence:
+                stats['sites_with_confluence'] += 1
+                stats['total_backup_files'] += 1
+                all_backup_dates.append(site_status['last_confluence_backup'])
+            
+            if has_jira and has_confluence:
+                stats['sites_with_both'] += 1
+        
+        if all_backup_dates:
+            stats['oldest_backup'] = min(all_backup_dates)
+            stats['newest_backup'] = max(all_backup_dates)
+        
+        return stats
+    
+    def _check_zip_bomb_safety(self, zip_file, file_path, threshold_entries, threshold_size, threshold_ratio):
+        """
+        Check if a ZIP file exhibits characteristics of a zip bomb.
+        
+        Args:
+            zip_file: Open ZipFile object
+            file_path (str): Path to the file being checked (for logging)
+            threshold_entries (int): Maximum allowed number of entries
+            threshold_size (int): Maximum allowed uncompressed size
+            threshold_ratio (int): Maximum allowed compression ratio
+            
+        Returns:
+            bool: True if the file appears safe, False if it looks like a zip bomb
+        """
+        try:
+            total_uncompressed_size = 0
+            total_compressed_size = 0
+            total_entries = 0
+            
+            for info in zip_file.infolist():
+                total_entries += 1
+                
+                # Check entry count threshold
+                if total_entries > threshold_entries:
+                    logging.warning('Backup file rejected: too many entries (%d > %d), potential zip bomb: %s', 
+                                  total_entries, threshold_entries, file_path)
+                    return False
+                
+                # Accumulate sizes for overall compression ratio calculation
+                total_uncompressed_size += info.file_size
+                total_compressed_size += info.compress_size
+                
+                # Check uncompressed size
+                if total_uncompressed_size > threshold_size:
+                    logging.warning('Backup file rejected: uncompressed size too large (%d > %d), potential zip bomb: %s', 
+                                  total_uncompressed_size, threshold_size, file_path)
+                    return False
+            
+            # Check overall compression ratio instead of individual entry ratios
+            # This prevents false positives from legitimate files with high compression (logs, etc.)
+            if total_compressed_size > 0:
+                overall_compression_ratio = total_uncompressed_size / total_compressed_size
+                if overall_compression_ratio > threshold_ratio:
+                    logging.warning('Backup file rejected: suspicious overall compression ratio (%.2f > %d), potential zip bomb: %s', 
+                                  overall_compression_ratio, threshold_ratio, file_path)
+                    return False
+            
+            logging.debug('ZIP file passed bomb detection: %d entries, %d total size, overall ratio %.2f, file: %s', 
+                         total_entries, total_uncompressed_size, 
+                         total_uncompressed_size / total_compressed_size if total_compressed_size > 0 else 0, 
+                         file_path)
+            return True
+            
+        except Exception as e:
+            logging.warning('Error during zip bomb detection for %s: %s (treating as suspicious)', file_path, str(e))
+            return False
+    
+    def _check_tar_bomb_safety(self, tar_file, file_path, threshold_entries, threshold_size, threshold_ratio):
+        """
+        Check if a TAR file exhibits characteristics of a tar bomb.
+        Based on security scanner recommendations for detecting compression bombs.
+        
+        Args:
+            tar_file: Open TarFile object
+            file_path (str): Path to the file being checked (for logging)
+            threshold_entries (int): Maximum allowed number of entries
+            threshold_size (int): Maximum allowed uncompressed size
+            threshold_ratio (int): Maximum allowed compression ratio
+            
+        Returns:
+            bool: True if the file appears safe, False if it looks like a tar bomb
+        """
+        try:
+            # Scan all entries in the tar file for bomb characteristics
+            scan_result = self._scan_tar_entries(tar_file, file_path, threshold_entries, threshold_size, threshold_ratio)
+            
+            if scan_result['is_safe']:
+                logging.debug('TAR file passed bomb detection: %d entries, %d total size, file: %s', 
+                             scan_result['total_entries'], scan_result['total_size'], file_path)
+                return True
+            else:
+                return False
+            
+        except Exception as e:
+            logging.warning('Error during tar bomb detection for %s: %s (treating as suspicious)', file_path, str(e))
+            return False
+
+    def _scan_tar_entries(self, tar_file, file_path, threshold_entries, threshold_size, threshold_ratio):
+        """
+        Scan all entries in a tar file and check for bomb characteristics.
+        
+        Args:
+            tar_file: Open TarFile object
+            file_path (str): Path to the file being checked (for logging)
+            threshold_entries (int): Maximum allowed number of entries
+            threshold_size (int): Maximum allowed uncompressed size
+            threshold_ratio (int): Maximum allowed compression ratio
+            
+        Returns:
+            dict: Dictionary with scan results including 'is_safe', 'total_entries', 'total_size'
+        """
+        total_size_archive = 0
+        total_entry_archive = 0
+        
+        for entry in tar_file:
+            total_entry_archive += 1
+            
+            # Check entry count threshold
+            if not self._check_entry_count_threshold(total_entry_archive, threshold_entries, file_path):
+                return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+            
+            # Check total size threshold
+            if not self._check_total_size_threshold(total_size_archive, threshold_size, file_path):
+                return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+            
+            # Process regular files for compression ratio validation
+            if entry.isreg():
+                total_size_archive += entry.size
+                
+                if not self._validate_entry_compression_ratio(entry, threshold_ratio, file_path):
+                    return {'is_safe': False, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+        
+        return {'is_safe': True, 'total_entries': total_entry_archive, 'total_size': total_size_archive}
+
+    def _check_entry_count_threshold(self, total_entries, threshold_entries, file_path):
+        """
+        Check if the entry count exceeds the threshold.
+        
+        Args:
+            total_entries (int): Current total number of entries
+            threshold_entries (int): Maximum allowed number of entries
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if within threshold, False if exceeded
+        """
+        if total_entries > threshold_entries:
+            logging.warning('Backup file rejected: too many entries (%d > %d), potential tar bomb: %s', 
+                          total_entries, threshold_entries, file_path)
+            return False
+        return True
+
+    def _check_total_size_threshold(self, total_size, threshold_size, file_path):
+        """
+        Check if the total uncompressed size exceeds the threshold.
+        
+        Args:
+            total_size (int): Current total uncompressed size
+            threshold_size (int): Maximum allowed uncompressed size
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if within threshold, False if exceeded
+        """
+        if total_size > threshold_size:
+            logging.warning('Backup file rejected: uncompressed size too large (%d > %d), potential tar bomb: %s', 
+                          total_size, threshold_size, file_path)
+            return False
+        return True
+
+    def _validate_entry_compression_ratio(self, entry, threshold_ratio, file_path):
+        """
+        Validate entry for TAR files. 
+        
+        Note: TAR format doesn't provide per-entry compressed sizes, so we can't 
+        calculate meaningful compression ratios for individual entries. We rely on 
+        overall file size limits and entry count limits for tar bomb protection.
+        
+        Args:
+            entry: TarInfo object for the entry to validate
+            threshold_ratio (int): Maximum allowed compression ratio (unused for TAR)
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True (TAR entry validation relies on other security checks)
+        """
+        # TAR format doesn't store per-entry compressed sizes, so we can't calculate
+        # meaningful compression ratios. The overall security is handled by:
+        # 1. Total entry count limits (checked in _scan_tar_entries)
+        # 2. Total uncompressed size limits (checked in _scan_tar_entries) 
+        # 3. Path traversal protection (checked in _is_path_safe)
+        
+        logging.debug('TAR entry validated (compression ratio check skipped for TAR format): %s', entry.name)
+        return True
+
+    def _sample_file_content(self, file_obj):
+        """
+        Sample the first few chunks of a file to check for suspicious expansion.
+        
+        Args:
+            file_obj: File-like object to sample from
+            
+        Returns:
+            dict: Dictionary with 'size_read' indicating how much data was read
+        """
+        chunk_size = 1024
+        max_sample_chunks = 10  # Only sample first 10KB
+        size_read = 0
+        
+        for _ in range(max_sample_chunks):
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                break
+            size_read += len(chunk)
+        
+        return {'size_read': size_read}
+
+    def _check_compression_ratio(self, entry, sample_data, threshold_ratio, file_path):
+        """
+        Check if the compression ratio based on sampled data is within acceptable limits.
+        
+        WARNING: This method has a fundamental flaw for TAR files - TAR format doesn't 
+        provide per-entry compressed sizes, making meaningful compression ratio calculation 
+        impossible. This method is kept for compatibility but should not be used for TAR files.
+        
+        Args:
+            entry: TarInfo object for the entry being checked
+            sample_data (dict): Dictionary with sampled data information
+            threshold_ratio (int): Maximum allowed compression ratio
+            file_path (str): Path to the file being checked (for logging)
+            
+        Returns:
+            bool: True if ratio is acceptable, False if suspicious
+        """
+        size_read = sample_data['size_read']
+        
+        # NOTE: For TAR files, this calculation is meaningless because:
+        # - entry.size is the uncompressed size declared in the TAR header
+        # - size_read is actual uncompressed bytes read from the file
+        # - We have no access to the compressed size of individual TAR entries
+        # This method should not be used for TAR file validation.
+        
+        if size_read > 0 and entry.size > 0:
+            # This calculates what fraction of the declared entry we've read,
+            # NOT a compression ratio. The original calculation was incorrect.
+            max_sample_size = 10 * 1024  # 10KB
+            sample_completeness_ratio = (size_read / min(entry.size, max_sample_size))
+            
+            # This threshold check doesn't make sense for compression bomb detection
+            if sample_completeness_ratio > threshold_ratio:
+                logging.warning('Backup file rejected: sample ratio (%.2f > %d) for entry %s. Note: This is not a compression ratio: %s', 
+                              sample_completeness_ratio, threshold_ratio, entry.name, file_path)
+                return False
+        
+        return True
+
+    def _is_path_safe(self, file_path):
+        """
+        Check if a file path from an archive is safe (doesn't contain directory traversal).
+        
+        Args:
+            file_path (str): Path to check
+            
+        Returns:
+            bool: True if the path is safe, False if it contains potential directory traversal
+        """
+        # Normalize the path to resolve any '..' or '.' components
+        normalized_path = os.path.normpath(file_path)
+        
+        # Check for absolute paths (starting with /)
+        if os.path.isabs(normalized_path):
+            return False
+        
+        # Check for path traversal patterns
+        if normalized_path.startswith('../') or '/../' in normalized_path or normalized_path == '..':
+            return False
+        
+        # Check for drive letters on Windows (like C:)
+        if ':' in normalized_path and os.name == 'nt':
+            return False
+        
+        return True

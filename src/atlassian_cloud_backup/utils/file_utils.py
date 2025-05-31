@@ -15,17 +15,15 @@ def sanitize_folder_name(url):
 class FileManager:
     """Handles file operations, path management, and status tracking."""
     
-    def __init__(self, url, status_file='backup_status.json', backup_target_directory=None):
+    def __init__(self, url, backup_target_directory=None):
         """
-        Initialize with URL and status file.
+        Initialize with URL and backup target directory.
         
         Args:
             url (str): Atlassian instance URL
-            status_file (str): Path to status file (default: 'backup_status.json')
             backup_target_directory (str, optional): Base directory for all backups.
         """
         self.url = url
-        self.base_status_file = os.getenv('STATUS_FILE', status_file)
         self.folder_name = sanitize_folder_name(url)  # Instance-specific folder name, e.g., "mycompany.atlassian.net"
         self.backup_target_directory = backup_target_directory
 
@@ -40,48 +38,6 @@ class FileManager:
         
         os.makedirs(instance_backup_folder, exist_ok=True)
         return instance_backup_folder
-        
-    def get_status_filename(self):
-        """Create a status filename, located within the instance's backup folder."""
-        base_status_file_name = os.path.basename(self.base_status_file) # e.g., "backup_status.json"
-        instance_folder_path = self.get_backup_folder() # This is an absolute path
-        return os.path.join(instance_folder_path, base_status_file_name)
-    
-    def load_status(self):
-        """Load backup status from JSON file."""
-        status_file = self.get_status_filename()
-        
-        if not os.path.isfile(status_file):
-            return {}
-        
-        with open(status_file, 'r') as f:
-            data = json.load(f)
-        
-        for key in ['last_jira_backup', 'last_confluence_backup']:
-            if key in data:
-                try:
-                    data[key] = datetime.fromisoformat(data[key])
-                except ValueError:
-                    logging.warning('Invalid datetime format in status for %s: %s', key, data[key])
-        return data
-    
-    def save_status(self, status):
-        """Save backup status to JSON file."""
-        to_save = {}
-        if 'last_jira_backup' in status:
-            to_save['last_jira_backup'] = status['last_jira_backup'].isoformat()
-            to_save['jira_task_id'] = status.get('jira_task_id')
-            to_save['jira_file'] = status.get('jira_file')
-        if 'last_confluence_backup' in status:
-            to_save['last_confluence_backup'] = status['last_confluence_backup'].isoformat()
-            to_save['confluence_file'] = status.get('confluence_file')
-        
-        # Use URL-specific status file
-        status_file = self.get_status_filename()
-        
-        with open(status_file, 'w') as f:
-            json.dump(to_save, f, indent=2)
-        logging.info('Status file updated: %s', status_file)
         
     def prepare_backup_path(self, service_name, extension='.zip', backup_datetime=None):
         """Create folder and return the full backup file path.
@@ -101,3 +57,160 @@ class FileManager:
             f"{service_name.lower()}-backup-{date_str}{extension}"
         )
         return filename
+    
+    def get_consolidated_status_file(self):
+        """Get the path to the consolidated status file in the root backup directory."""
+        if self.backup_target_directory:
+            root_backup_dir = os.path.abspath(self.backup_target_directory)
+        else:
+            # If no backup target directory, use current working directory
+            root_backup_dir = os.getcwd()
+        
+        os.makedirs(root_backup_dir, exist_ok=True)
+        return os.path.join(root_backup_dir, 'backup_status.json')
+    
+    def load_consolidated_status(self):
+        """Load consolidated backup status from JSON file.
+        
+        If the consolidated status file doesn't exist, attempts to discover
+        existing backup files and reconstruct the status.
+        
+        Returns:
+            dict: Consolidated status with site URLs as top-level keys
+        """
+        status_file = self.get_consolidated_status_file()
+        
+        if not os.path.isfile(status_file):
+            return self._discover_and_create_consolidated_status()
+        
+        try:
+            raw_data = self._load_status_file(status_file)
+            return self._convert_datetime_strings_to_objects(raw_data)
+        except Exception as e:
+            logging.warning('Error loading consolidated status file %s: %s', status_file, e)
+            logging.info('Attempting filesystem discovery as fallback')
+            return self._discover_and_create_consolidated_status()
+    
+    def _load_status_file(self, status_file):
+        """Load raw JSON data from status file.
+        
+        Args:
+            status_file (str): Path to the status file
+            
+        Returns:
+            dict: Raw data from JSON file
+        """
+        with open(status_file, 'r') as f:
+            return json.load(f)
+    
+    def _discover_and_create_consolidated_status(self):
+        """Discover existing backup files and create consolidated status.
+        
+        Returns:
+            dict: Discovered consolidated status
+        """
+        # Import here to avoid circular imports
+        from atlassian_cloud_backup.utils.filesystem_discovery import FilesystemDiscovery
+        
+        discovery = FilesystemDiscovery(self.backup_target_directory)
+        discovered_status = discovery.discover_sites_and_backups()
+        
+        if discovered_status:
+            # Log discovery statistics
+            stats = discovery.get_backup_statistics(discovered_status)
+            logging.info('Filesystem discovery found %d sites with %d total backup files', 
+                        stats['total_sites'], stats['total_backup_files'])
+            
+            if stats['oldest_backup'] and stats['newest_backup']:
+                logging.info('Backup date range: %s to %s', 
+                           stats['oldest_backup'].strftime('%Y-%m-%d'),
+                           stats['newest_backup'].strftime('%Y-%m-%d'))
+            
+            # Save the discovered status to avoid future discovery overhead
+            logging.info('Saving discovered status to consolidated status file')
+            self.save_consolidated_status(discovered_status)
+        else:
+            logging.info('No existing backup files found during filesystem discovery')
+        
+        return discovered_status
+    
+    def _convert_datetime_strings_to_objects(self, data):
+        """Convert datetime strings back to datetime objects for all sites.
+        
+        Args:
+            data (dict): Raw data with datetime strings
+            
+        Returns:
+            dict: Data with datetime objects
+        """
+        for site_url, site_data in data.items():
+            if isinstance(site_data, dict):
+                self._convert_site_datetime_fields(site_url, site_data)
+        return data
+    
+    def _convert_site_datetime_fields(self, site_url, site_data):
+        """Convert datetime fields for a single site.
+        
+        Args:
+            site_url (str): URL of the site
+            site_data (dict): Site data dictionary
+        """
+        datetime_fields = ['last_jira_backup', 'last_confluence_backup']
+        for field in datetime_fields:
+            if field in site_data:
+                self._convert_single_datetime_field(site_url, site_data, field)
+    
+    def _convert_single_datetime_field(self, site_url, site_data, field):
+        """Convert a single datetime field from string to datetime object.
+        
+        Args:
+            site_url (str): URL of the site
+            site_data (dict): Site data dictionary
+            field (str): Name of the datetime field
+        """
+        try:
+            site_data[field] = datetime.fromisoformat(site_data[field])
+        except ValueError:
+            logging.warning('Invalid datetime format in consolidated status for %s.%s: %s', 
+                          site_url, field, site_data[field])
+    
+    def save_consolidated_status(self, all_sites_status):
+        """Save consolidated backup status to JSON file.
+        
+        Args:
+            all_sites_status (dict): Dictionary with site URLs as keys and their status as values
+        """
+        status_file = self.get_consolidated_status_file()
+        
+        # Prepare data for JSON serialization
+        to_save = {}
+        for site_url, site_status in all_sites_status.items():
+            site_data = {}
+            if 'last_jira_backup' in site_status:
+                site_data['last_jira_backup'] = site_status['last_jira_backup'].isoformat()
+                site_data['jira_task_id'] = site_status.get('jira_task_id')
+                site_data['jira_file'] = site_status.get('jira_file')
+            if 'last_confluence_backup' in site_status:
+                site_data['last_confluence_backup'] = site_status['last_confluence_backup'].isoformat()
+                site_data['confluence_file'] = site_status.get('confluence_file')
+            
+            to_save[site_url] = site_data
+        
+        with open(status_file, 'w') as f:
+            json.dump(to_save, f, indent=2)
+        logging.info('Consolidated status file updated: %s', status_file)
+    
+    def update_site_in_consolidated_status(self, site_status):
+        """Update status for this specific site in the consolidated status file.
+        
+        Args:
+            site_status (dict): Status data for the current site
+        """
+        # Load existing consolidated status
+        consolidated = self.load_consolidated_status()
+        
+        # Update this site's status
+        consolidated[self.url] = site_status
+        
+        # Save back to consolidated file
+        self.save_consolidated_status(consolidated)
