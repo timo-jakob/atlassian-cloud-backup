@@ -95,7 +95,7 @@ def main():
     # Log information about the consolidated status file
     temp_fm = FileManager(urls[0], backup_target_directory=backup_target_directory)
     consolidated_status_file = temp_fm.get_consolidated_status_file()
-    logging.info('Consolidated backup status will be saved to: %s', consolidated_status_file)
+    logging.info('Backup status will be saved to: %s', consolidated_status_file)
     
     success_count = 0
     for url in urls:

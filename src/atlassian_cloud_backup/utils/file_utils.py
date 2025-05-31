@@ -67,7 +67,7 @@ class FileManager:
             root_backup_dir = os.getcwd()
         
         os.makedirs(root_backup_dir, exist_ok=True)
-        return os.path.join(root_backup_dir, 'consolidated_backup_status.json')
+        return os.path.join(root_backup_dir, 'backup_status.json')
     
     def load_consolidated_status(self):
         """Load consolidated backup status from JSON file.
