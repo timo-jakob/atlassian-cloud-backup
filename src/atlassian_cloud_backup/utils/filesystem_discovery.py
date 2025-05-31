@@ -148,7 +148,8 @@ class FilesystemDiscovery:
     def _validate_backup_file(self, file_path, extension):
         """
         Validate that a backup file is not corrupted by attempting to list its contents.
-        Also performs security checks to ensure the archive doesn't contain malicious paths.
+        Also performs security checks to ensure the archive doesn't contain malicious paths
+        or exhibit characteristics of zip/tar bombs.
         
         Args:
             file_path (str): Path to the backup file
@@ -157,6 +158,11 @@ class FilesystemDiscovery:
         Returns:
             bool: True if the file appears to be valid and safe, False if corrupted or malicious
         """
+        # Security thresholds for bomb detection
+        # Adjusted for large Atlassian backup files (can be 250GB+ compressed)
+        THRESHOLD_ENTRIES = 1000000  # Maximum number of entries (1M files)
+        THRESHOLD_SIZE = 1073741824000  # Maximum uncompressed size (1TB = 1000GB)
+        THRESHOLD_RATIO = 100  # Maximum compression ratio (higher threshold for legitimate backups)
         try:
             if extension == 'zip':
                 with zipfile.ZipFile(file_path, 'r') as zip_file:
@@ -165,12 +171,14 @@ class FilesystemDiscovery:
                     
                     # Security check: validate file paths to prevent directory traversal
                     for file_name in file_names:
-                        if self._is_path_safe(file_name):
-                            continue
-                        else:
+                        if not self._is_path_safe(file_name):
                             logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
                                           file_path, file_name)
                             return False
+                    
+                    # Security check: detect zip bombs
+                    if not self._check_zip_bomb_safety(zip_file, file_path, THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO):
+                        return False
                     
                     return True
                     
@@ -182,12 +190,14 @@ class FilesystemDiscovery:
                     
                     # Security check: validate file paths to prevent directory traversal
                     for file_name in file_names:
-                        if self._is_path_safe(file_name):
-                            continue
-                        else:
+                        if not self._is_path_safe(file_name):
                             logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
                                           file_path, file_name)
                             return False
+                    
+                    # Security check: detect tar bombs
+                    if not self._check_tar_bomb_safety(tar_file, file_path, THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO):
+                        return False
                     
                     return True
             else:
@@ -351,6 +361,137 @@ class FilesystemDiscovery:
         
         return stats
     
+    def _check_zip_bomb_safety(self, zip_file, file_path, threshold_entries, threshold_size, threshold_ratio):
+        """
+        Check if a ZIP file exhibits characteristics of a zip bomb.
+        
+        Args:
+            zip_file: Open ZipFile object
+            file_path (str): Path to the file being checked (for logging)
+            threshold_entries (int): Maximum allowed number of entries
+            threshold_size (int): Maximum allowed uncompressed size
+            threshold_ratio (int): Maximum allowed compression ratio
+            
+        Returns:
+            bool: True if the file appears safe, False if it looks like a zip bomb
+        """
+        try:
+            total_uncompressed_size = 0
+            total_entries = 0
+            
+            for info in zip_file.infolist():
+                total_entries += 1
+                
+                # Check entry count threshold
+                if total_entries > threshold_entries:
+                    logging.warning('Backup file rejected: too many entries (%d > %d), potential zip bomb: %s', 
+                                  total_entries, threshold_entries, file_path)
+                    return False
+                
+                # Check uncompressed size
+                total_uncompressed_size += info.file_size
+                if total_uncompressed_size > threshold_size:
+                    logging.warning('Backup file rejected: uncompressed size too large (%d > %d), potential zip bomb: %s', 
+                                  total_uncompressed_size, threshold_size, file_path)
+                    return False
+                
+                # Check compression ratio (avoid division by zero)
+                if info.compress_size > 0:
+                    compression_ratio = info.file_size / info.compress_size
+                    if compression_ratio > threshold_ratio:
+                        logging.warning('Backup file rejected: suspicious compression ratio (%.2f > %d), potential zip bomb: %s', 
+                                      compression_ratio, threshold_ratio, file_path)
+                        return False
+            
+            logging.debug('ZIP file passed bomb detection: %d entries, %d total size, file: %s', 
+                         total_entries, total_uncompressed_size, file_path)
+            return True
+            
+        except Exception as e:
+            logging.warning('Error during zip bomb detection for %s: %s (treating as suspicious)', file_path, str(e))
+            return False
+    
+    def _check_tar_bomb_safety(self, tar_file, file_path, threshold_entries, threshold_size, threshold_ratio):
+        """
+        Check if a TAR file exhibits characteristics of a tar bomb.
+        Based on security scanner recommendations for detecting compression bombs.
+        
+        Args:
+            tar_file: Open TarFile object
+            file_path (str): Path to the file being checked (for logging)
+            threshold_entries (int): Maximum allowed number of entries
+            threshold_size (int): Maximum allowed uncompressed size
+            threshold_ratio (int): Maximum allowed compression ratio
+            
+        Returns:
+            bool: True if the file appears safe, False if it looks like a tar bomb
+        """
+        try:
+            total_size_archive = 0
+            total_entry_archive = 0
+            
+            for entry in tar_file:
+                total_entry_archive += 1
+                
+                # Check entry count threshold - too many entries can lead to inode exhaustion
+                if total_entry_archive > threshold_entries:
+                    logging.warning('Backup file rejected: too many entries (%d > %d), potential tar bomb: %s', 
+                                  total_entry_archive, threshold_entries, file_path)
+                    return False
+                
+                # Check total size first to avoid processing huge files
+                if total_size_archive > threshold_size:
+                    logging.warning('Backup file rejected: uncompressed size too large (%d > %d), potential tar bomb: %s', 
+                                  total_size_archive, threshold_size, file_path)
+                    return False
+                
+                # Only process regular files (not directories, links, etc.)
+                if entry.isreg():
+                    # Add the declared size to our total
+                    total_size_archive += entry.size
+                    
+                    # For compression ratio check, we'll sample the file rather than reading it entirely
+                    # This prevents the bomb from being triggered while still detecting suspicious ratios
+                    try:
+                        file_obj = tar_file.extractfile(entry)
+                        if file_obj is None:
+                            continue
+                        
+                        # Sample the first few chunks to check for suspicious expansion
+                        chunk_size = 1024
+                        max_sample_chunks = 10  # Only sample first 10KB
+                        size_read = 0
+                        
+                        for i in range(max_sample_chunks):
+                            chunk = file_obj.read(chunk_size)
+                            if not chunk:
+                                break
+                            size_read += len(chunk)
+                        
+                        # If we read significantly more than expected for the sample, that's suspicious
+                        # For a normal file, reading 10KB should not expand to much more than that
+                        if size_read > 0 and entry.size > 0:
+                            # Calculate how much the sample expanded compared to declared size
+                            sample_ratio = (size_read / min(entry.size, max_sample_chunks * chunk_size))
+                            if sample_ratio > threshold_ratio:
+                                logging.warning('Backup file rejected: suspicious expansion ratio (%.2f > %d) for entry %s, potential tar bomb: %s', 
+                                              sample_ratio, threshold_ratio, entry.name, file_path)
+                                return False
+                            
+                    except Exception as e:
+                        # If we can't read the file for validation, that's suspicious
+                        logging.warning('Backup file rejected: unable to validate entry %s (%s), potential tar bomb: %s', 
+                                      entry.name, str(e), file_path)
+                        return False
+            
+            logging.debug('TAR file passed bomb detection: %d entries, %d total size, file: %s', 
+                         total_entry_archive, total_size_archive, file_path)
+            return True
+            
+        except Exception as e:
+            logging.warning('Error during tar bomb detection for %s: %s (treating as suspicious)', file_path, str(e))
+            return False
+
     def _is_path_safe(self, file_path):
         """
         Check if a file path from an archive is safe (doesn't contain directory traversal).
