@@ -214,52 +214,13 @@ class FilesystemDiscovery:
         Returns:
             bool: True if the file appears to be valid and safe, False if corrupted or malicious
         """
-        # Security thresholds for bomb detection
-        # Adjusted for large Atlassian backup files (can be 250GB+ compressed)
-        THRESHOLD_ENTRIES = 1000000  # Maximum number of entries (1M files)
-        THRESHOLD_SIZE = 1073741824000  # Maximum uncompressed size (1TB = 1000GB)
-        THRESHOLD_RATIO = 100  # Maximum compression ratio (higher threshold for legitimate backups)
         try:
             if extension == 'zip':
-                with zipfile.ZipFile(file_path, 'r') as zip_file:
-                    # List the contents - this will fail if the ZIP is corrupted
-                    file_names = zip_file.namelist()
-                    
-                    # Security check: validate file paths to prevent directory traversal
-                    for file_name in file_names:
-                        if not self._is_path_safe(file_name):
-                            logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
-                                          file_path, file_name)
-                            return False
-                    
-                    # Security check: detect zip bombs
-                    if not self._check_zip_bomb_safety(zip_file, file_path, THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO):
-                        return False
-                    
-                    return True
-                    
+                return self._validate_zip_file(file_path)
             elif extension == 'tar.gz':
-                with tarfile.open(file_path, 'r:gz') as tar_file:
-                    # List the contents - this will fail if the tar.gz is corrupted
-                    # Note: We only list contents, never extract, so this is safe from zip-slip attacks
-                    file_names = tar_file.getnames()
-                    
-                    # Security check: validate file paths to prevent directory traversal
-                    for file_name in file_names:
-                        if not self._is_path_safe(file_name):
-                            logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
-                                          file_path, file_name)
-                            return False
-                    
-                    # Security check: detect tar bombs
-                    if not self._check_tar_bomb_safety(tar_file, file_path, THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO):
-                        return False
-                    
-                    return True
+                return self._validate_tar_gz_file(file_path)
             else:
-                # Unknown extension, assume it's valid for now
-                logging.warning('Unknown backup file extension: %s for file %s', extension, file_path)
-                return True
+                return self._handle_unknown_extension(file_path, extension)
                 
         except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as e:
             logging.warning('Backup file appears to be corrupted and will be ignored: %s (error: %s)', 
@@ -270,6 +231,96 @@ class FilesystemDiscovery:
             logging.warning('Error validating backup file %s: %s (treating as corrupted)', 
                           file_path, str(e))
             return False
+
+    def _get_security_thresholds(self):
+        """
+        Get security thresholds for bomb detection.
+        Adjusted for large Atlassian backup files (can be 250GB+ compressed).
+        
+        Returns:
+            tuple: (max_entries, max_size, max_ratio)
+        """
+        THRESHOLD_ENTRIES = 1000000  # Maximum number of entries (1M files)
+        THRESHOLD_SIZE = 1073741824000  # Maximum uncompressed size (1TB = 1000GB)
+        THRESHOLD_RATIO = 100  # Maximum compression ratio (higher threshold for legitimate backups)
+        return THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO
+
+    def _validate_zip_file(self, file_path):
+        """
+        Validate a ZIP backup file for corruption and security issues.
+        
+        Args:
+            file_path (str): Path to the ZIP file
+            
+        Returns:
+            bool: True if file is valid and safe, False otherwise
+        """
+        with zipfile.ZipFile(file_path, 'r') as zip_file:
+            # List the contents - this will fail if the ZIP is corrupted
+            file_names = zip_file.namelist()
+            
+            # Security check: validate file paths to prevent directory traversal
+            if not self._validate_file_paths(file_names, file_path):
+                return False
+            
+            # Security check: detect zip bombs
+            threshold_entries, threshold_size, threshold_ratio = self._get_security_thresholds()
+            return self._check_zip_bomb_safety(zip_file, file_path, threshold_entries, threshold_size, threshold_ratio)
+
+    def _validate_tar_gz_file(self, file_path):
+        """
+        Validate a TAR.GZ backup file for corruption and security issues.
+        
+        Args:
+            file_path (str): Path to the TAR.GZ file
+            
+        Returns:
+            bool: True if file is valid and safe, False otherwise
+        """
+        with tarfile.open(file_path, 'r:gz') as tar_file:
+            # List the contents - this will fail if the tar.gz is corrupted
+            # Note: We only list contents, never extract, so this is safe from zip-slip attacks
+            file_names = tar_file.getnames()
+            
+            # Security check: validate file paths to prevent directory traversal
+            if not self._validate_file_paths(file_names, file_path):
+                return False
+            
+            # Security check: detect tar bombs
+            threshold_entries, threshold_size, threshold_ratio = self._get_security_thresholds()
+            return self._check_tar_bomb_safety(tar_file, file_path, threshold_entries, threshold_size, threshold_ratio)
+
+    def _validate_file_paths(self, file_names, file_path):
+        """
+        Validate that all file paths in an archive are safe (no directory traversal).
+        
+        Args:
+            file_names (list): List of file names from the archive
+            file_path (str): Path to the archive file (for logging)
+            
+        Returns:
+            bool: True if all paths are safe, False if any unsafe path is found
+        """
+        for file_name in file_names:
+            if not self._is_path_safe(file_name):
+                logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
+                              file_path, file_name)
+                return False
+        return True
+
+    def _handle_unknown_extension(self, file_path, extension):
+        """
+        Handle backup files with unknown extensions.
+        
+        Args:
+            file_path (str): Path to the file
+            extension (str): File extension
+            
+        Returns:
+            bool: True (assume valid for unknown extensions)
+        """
+        logging.warning('Unknown backup file extension: %s for file %s', extension, file_path)
+        return True
     
     def _discover_site_backups(self, site_dir):
         """
