@@ -118,27 +118,77 @@ class FilesystemDiscovery:
         
         return None
     
+    def _is_path_safe(self, file_path):
+        """
+        Check if a file path is safe (doesn't contain directory traversal attempts).
+        
+        Args:
+            file_path (str): File path to check
+            
+        Returns:
+            bool: True if the path is safe, False if it contains directory traversal attempts
+        """
+        # Normalize the path to resolve any ".." components
+        normalized_path = os.path.normpath(file_path)
+        
+        # Check for absolute paths (security risk)
+        if os.path.isabs(normalized_path):
+            return False
+        
+        # Check if the normalized path tries to go outside the current directory
+        if normalized_path.startswith('..') or '/..' in normalized_path or '\\..\\' in normalized_path:
+            return False
+        
+        # Check for other suspicious patterns
+        if normalized_path.startswith('/') or normalized_path.startswith('\\'):
+            return False
+            
+        return True
+    
     def _validate_backup_file(self, file_path, extension):
         """
         Validate that a backup file is not corrupted by attempting to list its contents.
+        Also performs security checks to ensure the archive doesn't contain malicious paths.
         
         Args:
             file_path (str): Path to the backup file
             extension (str): File extension (zip or tar.gz)
             
         Returns:
-            bool: True if the file appears to be valid, False if corrupted
+            bool: True if the file appears to be valid and safe, False if corrupted or malicious
         """
         try:
             if extension == 'zip':
                 with zipfile.ZipFile(file_path, 'r') as zip_file:
-                    # Try to list the contents - this will fail if the ZIP is corrupted
-                    zip_file.namelist()
+                    # List the contents - this will fail if the ZIP is corrupted
+                    file_names = zip_file.namelist()
+                    
+                    # Security check: validate file paths to prevent directory traversal
+                    for file_name in file_names:
+                        if self._is_path_safe(file_name):
+                            continue
+                        else:
+                            logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
+                                          file_path, file_name)
+                            return False
+                    
                     return True
+                    
             elif extension == 'tar.gz':
                 with tarfile.open(file_path, 'r:gz') as tar_file:
-                    # Try to list the contents - this will fail if the tar.gz is corrupted
-                    tar_file.getnames()
+                    # List the contents - this will fail if the tar.gz is corrupted
+                    # Note: We only list contents, never extract, so this is safe from zip-slip attacks
+                    file_names = tar_file.getnames()
+                    
+                    # Security check: validate file paths to prevent directory traversal
+                    for file_name in file_names:
+                        if self._is_path_safe(file_name):
+                            continue
+                        else:
+                            logging.warning('Backup file contains unsafe path and will be ignored: %s (unsafe path: %s)', 
+                                          file_path, file_name)
+                            return False
+                    
                     return True
             else:
                 # Unknown extension, assume it's valid for now
@@ -300,3 +350,30 @@ class FilesystemDiscovery:
             stats['newest_backup'] = max(all_backup_dates)
         
         return stats
+    
+    def _is_path_safe(self, file_path):
+        """
+        Check if a file path from an archive is safe (doesn't contain directory traversal).
+        
+        Args:
+            file_path (str): Path to check
+            
+        Returns:
+            bool: True if the path is safe, False if it contains potential directory traversal
+        """
+        # Normalize the path to resolve any '..' or '.' components
+        normalized_path = os.path.normpath(file_path)
+        
+        # Check for absolute paths (starting with /)
+        if os.path.isabs(normalized_path):
+            return False
+        
+        # Check for path traversal patterns
+        if normalized_path.startswith('../') or '/../' in normalized_path or normalized_path == '..':
+            return False
+        
+        # Check for drive letters on Windows (like C:)
+        if ':' in normalized_path and os.name == 'nt':
+            return False
+        
+        return True

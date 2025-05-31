@@ -5,6 +5,7 @@ import tempfile
 import shutil
 import zipfile
 import tarfile
+import io
 from datetime import datetime, time
 from unittest.mock import patch, MagicMock
 import pytest
@@ -418,6 +419,137 @@ class TestFilesystemDiscovery:
             warning_call = mock_logging.warning.call_args[0]
             assert "unknown" in warning_call[0].lower()
     
+    def test_validate_zip_with_directory_traversal(self):
+        """Test validation rejects ZIP files with directory traversal paths."""
+        discovery = FilesystemDiscovery(self.temp_dir)
+        
+        # Create a ZIP file with malicious paths
+        zip_path = os.path.join(self.temp_dir, "malicious-backup.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zip_file:
+            zip_file.writestr("../../../etc/passwd", "malicious content")
+            zip_file.writestr("normal_file.txt", "normal content")
+        
+        with patch('atlassian_cloud_backup.utils.filesystem_discovery.logging') as mock_logging:
+            result = discovery._validate_backup_file(zip_path, "zip")
+            assert result is False
+            mock_logging.warning.assert_called_once()
+            warning_call = mock_logging.warning.call_args[0]
+            assert "unsafe path" in warning_call[0].lower()
+            assert "../../../etc/passwd" in warning_call[2]
+
+    def test_validate_tar_gz_with_directory_traversal(self):
+        """Test validation rejects tar.gz files with directory traversal paths."""
+        discovery = FilesystemDiscovery(self.temp_dir)
+        
+        # Create a tar.gz file with malicious paths
+        tar_path = os.path.join(self.temp_dir, "malicious-backup.tar.gz")
+        
+        # Create a temporary directory and files for the archive
+        temp_archive_dir = os.path.join(self.temp_dir, "temp_archive")
+        os.makedirs(temp_archive_dir)
+        
+        normal_file = os.path.join(temp_archive_dir, "normal.txt")
+        with open(normal_file, 'w') as f:
+            f.write("normal content")
+        
+        with tarfile.open(tar_path, 'w:gz') as tar_file:
+            # Add normal file
+            tar_file.add(normal_file, arcname="normal.txt")
+            
+            # Create a malicious tarinfo manually
+            import io
+            malicious_info = tarfile.TarInfo(name="../../../tmp/malicious.txt")
+            malicious_info.size = len(b"malicious content")
+            tar_file.addfile(malicious_info, io.BytesIO(b"malicious content"))
+        
+        with patch('atlassian_cloud_backup.utils.filesystem_discovery.logging') as mock_logging:
+            result = discovery._validate_backup_file(tar_path, "tar.gz")
+            assert result is False
+            mock_logging.warning.assert_called_once()
+            warning_call = mock_logging.warning.call_args[0]
+            assert "unsafe path" in warning_call[0].lower()
+
+    def test_validate_zip_with_absolute_paths(self):
+        """Test validation rejects ZIP files with absolute paths."""
+        discovery = FilesystemDiscovery(self.temp_dir)
+        
+        # Create a ZIP file with absolute paths
+        zip_path = os.path.join(self.temp_dir, "absolute-paths.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zip_file:
+            zip_file.writestr("/etc/passwd", "malicious content")
+            zip_file.writestr("normal_file.txt", "normal content")
+        
+        with patch('atlassian_cloud_backup.utils.filesystem_discovery.logging') as mock_logging:
+            result = discovery._validate_backup_file(zip_path, "zip")
+            assert result is False
+            mock_logging.warning.assert_called_once()
+
+    def test_is_path_safe(self):
+        """Test the path safety checker."""
+        discovery = FilesystemDiscovery(self.temp_dir)
+        
+        # Safe paths
+        safe_paths = [
+            "normal_file.txt",
+            "folder/file.txt",
+            "backup/data/important.xml",
+            "ATLASSIAN-BACKUP.xml"
+        ]
+        
+        for path in safe_paths:
+            assert discovery._is_path_safe(path) is True, f"Path should be safe: {path}"
+        
+        # Unsafe paths
+        unsafe_paths = [
+            "../../../etc/passwd",
+            "/etc/passwd",
+            "folder/../../../etc/passwd",
+            "..",
+            "../",
+            "folder/../../../sensitive",
+        ]
+        
+        for path in unsafe_paths:
+            assert discovery._is_path_safe(path) is False, f"Path should be unsafe: {path}"
+
+    def test_discover_ignores_malicious_backup_files(self):
+        """Test that discovery ignores backup files with malicious paths."""
+        site_url = "https://malicioussite.atlassian.net"
+        site_folder = sanitize_folder_name(site_url)
+        site_dir = os.path.join(self.temp_dir, site_folder)
+        os.makedirs(site_dir)
+        
+        # Create a valid backup
+        valid_backup = os.path.join(site_dir, "jira-backup-2024-01-15.zip")
+        with zipfile.ZipFile(valid_backup, 'w') as zip_file:
+            zip_file.writestr("valid.txt", "valid content")
+        
+        # Create a malicious backup with newer date (should be ignored)
+        malicious_backup = os.path.join(site_dir, "jira-backup-2024-01-20.zip")
+        with zipfile.ZipFile(malicious_backup, 'w') as zip_file:
+            zip_file.writestr("../../../etc/passwd", "malicious content")
+            zip_file.writestr("normal.txt", "normal content")
+        
+        discovery = FilesystemDiscovery(self.temp_dir)
+        
+        with patch('atlassian_cloud_backup.utils.filesystem_discovery.logging') as mock_logging:
+            result = discovery.discover_sites_and_backups()
+            
+            # Should find the site but use the older valid backup, not the newer malicious one
+            assert len(result) == 1
+            assert site_url in result
+            site_status = result[site_url]
+            assert 'last_jira_backup' in site_status
+            assert site_status['jira_file'] == valid_backup  # Should use the valid backup
+            
+            expected_date = datetime.combine(datetime(2024, 1, 15).date(), time(0, 0, 0))
+            assert site_status['last_jira_backup'] == expected_date
+            
+            # Should have logged a warning about the malicious file
+            mock_logging.warning.assert_called()
+            warning_calls = [call[0][0] for call in mock_logging.warning.call_args_list]
+            assert any("unsafe path" in msg.lower() for msg in warning_calls)
+
     def test_discover_ignores_corrupted_backup_files(self):
         """Test that discovery ignores corrupted backup files."""
         site_url = "https://corruptedsite.atlassian.net"
