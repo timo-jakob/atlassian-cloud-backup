@@ -729,7 +729,7 @@ class FilesystemDiscovery:
         max_sample_chunks = 10  # Only sample first 10KB
         size_read = 0
         
-        for i in range(max_sample_chunks):
+        for _ in range(max_sample_chunks):
             chunk = file_obj.read(chunk_size)
             if not chunk:
                 break
