@@ -332,14 +332,44 @@ class FilesystemDiscovery:
         Returns:
             dict: Site status dictionary with backup information
         """
-        site_status = {}
-        
-        try:
-            files = os.listdir(site_dir)
-        except OSError as e:
-            logging.warning('Error reading site directory %s: %s', site_dir, e)
+        # Get list of files in the directory
+        files = self._get_site_files(site_dir)
+        if not files:
             return {}
         
+        # Process all backup files and categorize them
+        jira_backups, confluence_backups = self._process_backup_files(site_dir, files)
+        
+        # Generate site status from discovered backups
+        return self._generate_site_status(jira_backups, confluence_backups)
+
+    def _get_site_files(self, site_dir):
+        """
+        Get the list of files in a site directory.
+        
+        Args:
+            site_dir (str): Path to the site's backup directory
+            
+        Returns:
+            list: List of filenames, or empty list if error
+        """
+        try:
+            return os.listdir(site_dir)
+        except OSError as e:
+            logging.warning('Error reading site directory %s: %s', site_dir, e)
+            return []
+
+    def _process_backup_files(self, site_dir, files):
+        """
+        Process all files in a site directory and categorize valid backup files.
+        
+        Args:
+            site_dir (str): Path to the site's backup directory
+            files (list): List of filenames to process
+            
+        Returns:
+            tuple: (jira_backups, confluence_backups) lists of backup info dictionaries
+        """
         # Pattern to match backup files: {service}-backup-{date}.{extension}
         backup_pattern = re.compile(r'^(jira|confluence)-backup-(\d{4}-\d{2}-\d{2})\.(zip|tar\.gz)$', re.IGNORECASE)
         
@@ -353,39 +383,73 @@ class FilesystemDiscovery:
             if os.path.isdir(file_path):
                 continue
             
+            # Check if file matches backup pattern
             match = backup_pattern.match(filename)
-            if match:
-                service = match.group(1).lower()
-                date_str = match.group(2)
-                extension = match.group(3)
-                
-                # Validate the backup file before processing it
-                if not self._validate_backup_file(file_path, extension):
-                    # File is corrupted, skip it (warning already logged in validation method)
-                    continue
-                
-                try:
-                    # Parse the date and create a datetime object with 00:00:00 time
-                    backup_date = datetime.strptime(date_str, '%Y-%m-%d')
-                    backup_datetime = datetime.combine(backup_date.date(), time(0, 0, 0))
-                    
-                    backup_info = {
-                        'file_path': file_path,
-                        'filename': filename,
-                        'date': backup_datetime,
-                        'extension': extension
-                    }
-                    
-                    if service == 'jira':
-                        jira_backups.append(backup_info)
-                    elif service == 'confluence':
-                        confluence_backups.append(backup_info)
-                        
-                except ValueError as e:
-                    logging.warning('Could not parse date from backup filename %s: %s', filename, e)
-                    continue
+            if not match:
+                continue
+            
+            # Process the matched backup file
+            backup_info = self._process_single_backup_file(file_path, filename, match)
+            if backup_info:
+                service = backup_info['service']
+                if service == 'jira':
+                    jira_backups.append(backup_info)
+                elif service == 'confluence':
+                    confluence_backups.append(backup_info)
         
-        # Find the most recent backup for each service
+        return jira_backups, confluence_backups
+
+    def _process_single_backup_file(self, file_path, filename, match):
+        """
+        Process a single backup file and create backup info dictionary.
+        
+        Args:
+            file_path (str): Full path to the backup file
+            filename (str): Filename of the backup file
+            match: Regex match object with service, date, and extension groups
+            
+        Returns:
+            dict or None: Backup info dictionary if valid, None if invalid
+        """
+        service = match.group(1).lower()
+        date_str = match.group(2)
+        extension = match.group(3)
+        
+        # Validate the backup file before processing it
+        if not self._validate_backup_file(file_path, extension):
+            # File is corrupted, skip it (warning already logged in validation method)
+            return None
+        
+        # Parse the date
+        try:
+            backup_date = datetime.strptime(date_str, '%Y-%m-%d')
+            backup_datetime = datetime.combine(backup_date.date(), time(0, 0, 0))
+            
+            return {
+                'service': service,
+                'file_path': file_path,
+                'filename': filename,
+                'date': backup_datetime,
+                'extension': extension
+            }
+        except ValueError as e:
+            logging.warning('Could not parse date from backup filename %s: %s', filename, e)
+            return None
+
+    def _generate_site_status(self, jira_backups, confluence_backups):
+        """
+        Generate site status dictionary from categorized backup lists.
+        
+        Args:
+            jira_backups (list): List of Jira backup info dictionaries
+            confluence_backups (list): List of Confluence backup info dictionaries
+            
+        Returns:
+            dict: Site status dictionary with backup information
+        """
+        site_status = {}
+        
+        # Process Jira backups
         if jira_backups:
             latest_jira = max(jira_backups, key=lambda x: x['date'])
             site_status['last_jira_backup'] = latest_jira['date']
@@ -394,6 +458,7 @@ class FilesystemDiscovery:
             logging.debug('Found Jira backup: %s (date: %s)', 
                          latest_jira['filename'], latest_jira['date'])
         
+        # Process Confluence backups
         if confluence_backups:
             latest_confluence = max(confluence_backups, key=lambda x: x['date'])
             site_status['last_confluence_backup'] = latest_confluence['date']
