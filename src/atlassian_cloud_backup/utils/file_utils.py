@@ -81,23 +81,63 @@ class FileManager:
             return {}
         
         try:
-            with open(status_file, 'r') as f:
-                data = json.load(f)
-            
-            # Convert datetime strings back to datetime objects for all sites
-            for site_url, site_data in data.items():
-                if isinstance(site_data, dict):
-                    for key in ['last_jira_backup', 'last_confluence_backup']:
-                        if key in site_data:
-                            try:
-                                site_data[key] = datetime.fromisoformat(site_data[key])
-                            except ValueError:
-                                logging.warning('Invalid datetime format in consolidated status for %s.%s: %s', 
-                                              site_url, key, site_data[key])
-            return data
+            raw_data = self._load_status_file(status_file)
+            return self._convert_datetime_strings_to_objects(raw_data)
         except (json.JSONDecodeError, Exception) as e:
             logging.warning('Error loading consolidated status file %s: %s', status_file, e)
             return {}
+    
+    def _load_status_file(self, status_file):
+        """Load raw JSON data from status file.
+        
+        Args:
+            status_file (str): Path to the status file
+            
+        Returns:
+            dict: Raw data from JSON file
+        """
+        with open(status_file, 'r') as f:
+            return json.load(f)
+    
+    def _convert_datetime_strings_to_objects(self, data):
+        """Convert datetime strings back to datetime objects for all sites.
+        
+        Args:
+            data (dict): Raw data with datetime strings
+            
+        Returns:
+            dict: Data with datetime objects
+        """
+        for site_url, site_data in data.items():
+            if isinstance(site_data, dict):
+                self._convert_site_datetime_fields(site_url, site_data)
+        return data
+    
+    def _convert_site_datetime_fields(self, site_url, site_data):
+        """Convert datetime fields for a single site.
+        
+        Args:
+            site_url (str): URL of the site
+            site_data (dict): Site data dictionary
+        """
+        datetime_fields = ['last_jira_backup', 'last_confluence_backup']
+        for field in datetime_fields:
+            if field in site_data:
+                self._convert_single_datetime_field(site_url, site_data, field)
+    
+    def _convert_single_datetime_field(self, site_url, site_data, field):
+        """Convert a single datetime field from string to datetime object.
+        
+        Args:
+            site_url (str): URL of the site
+            site_data (dict): Site data dictionary
+            field (str): Name of the datetime field
+        """
+        try:
+            site_data[field] = datetime.fromisoformat(site_data[field])
+        except ValueError:
+            logging.warning('Invalid datetime format in consolidated status for %s.%s: %s', 
+                          site_url, field, site_data[field])
     
     def save_consolidated_status(self, all_sites_status):
         """Save consolidated backup status to JSON file.
