@@ -88,34 +88,90 @@ class FilesystemDiscovery:
             str or None: Reconstructed URL, or None if it doesn't look like an Atlassian URL
         """
         # Replace underscores with dots for common domain patterns
-        # This is a heuristic - we can't perfectly reverse the sanitization
         reconstructed = folder_name.replace('_', '.')
         
-        # Check if it looks like an Atlassian Cloud URL pattern
+        # Try different reconstruction strategies
+        url = self._try_direct_atlassian_match(reconstructed)
+        if url:
+            return url
+            
+        url = self._try_incomplete_atlassian_match(reconstructed)
+        if url:
+            return url
+            
+        return self._try_generic_domain_match(folder_name, reconstructed)
+    
+    def _try_direct_atlassian_match(self, reconstructed):
+        """
+        Check if the reconstructed string already contains a complete Atlassian domain.
+        
+        Args:
+            reconstructed (str): Folder name with underscores replaced by dots
+            
+        Returns:
+            str or None: Complete URL if found, None otherwise
+        """
         if '.atlassian.net' in reconstructed or '.atlassian.com' in reconstructed:
             return f'https://{reconstructed}'
+        return None
+    
+    def _try_incomplete_atlassian_match(self, reconstructed):
+        """
+        Try to reconstruct URL when 'atlassian' is present but domain is incomplete.
         
-        # Handle cases where the domain might have had different characters replaced
-        # Try some common patterns
-        if 'atlassian' in reconstructed.lower():
-            # If it contains atlassian but no .net/.com, try adding .net
-            if '.net' not in reconstructed and '.com' not in reconstructed:
-                # Replace the last underscore group with .net if it makes sense
-                parts = reconstructed.rsplit('.', 1)
-                if len(parts) == 2 and parts[1] in ('net', 'com'):
-                    return f'https://{reconstructed}'
-                else:
-                    # Try adding .atlassian.net
-                    base = reconstructed.replace('.atlassian', '').replace('atlassian', '')
-                    if base and not base.startswith('.') and not base.endswith('.'):
-                        return f'https://{base}.atlassian.net'
+        Args:
+            reconstructed (str): Folder name with underscores replaced by dots
+            
+        Returns:
+            str or None: Complete URL if reconstructed, None otherwise
+        """
+        if 'atlassian' not in reconstructed.lower():
+            return None
+            
+        # If it contains atlassian but no .net/.com, try to fix it
+        if '.net' in reconstructed or '.com' in reconstructed:
+            return None  # Already has domain extension, handled elsewhere
         
-        # If we still can't figure it out, try a different approach
-        # Look for patterns that suggest it was a URL
-        if re.match(r'^[a-zA-Z0-9._-]+$', folder_name) and '.' in folder_name:
-            # Assume it was a domain and add https://
+        # Check if it's already properly formatted
+        parts = reconstructed.rsplit('.', 1)
+        if len(parts) == 2 and parts[1] in ('net', 'com'):
             return f'https://{reconstructed}'
         
+        # Try adding .atlassian.net
+        base = self._extract_base_domain(reconstructed)
+        if base:
+            return f'https://{base}.atlassian.net'
+        
+        return None
+    
+    def _extract_base_domain(self, reconstructed):
+        """
+        Extract the base domain name from a string containing 'atlassian'.
+        
+        Args:
+            reconstructed (str): String with 'atlassian' in it
+            
+        Returns:
+            str or None: Base domain if valid, None otherwise
+        """
+        base = reconstructed.replace('.atlassian', '').replace('atlassian', '')
+        if base and not base.startswith('.') and not base.endswith('.'):
+            return base
+        return None
+    
+    def _try_generic_domain_match(self, folder_name, reconstructed):
+        """
+        Try to match a generic domain pattern and add https prefix.
+        
+        Args:
+            folder_name (str): Original folder name
+            reconstructed (str): Folder name with underscores replaced by dots
+            
+        Returns:
+            str or None: Complete URL if pattern matches, None otherwise
+        """
+        if re.match(r'^[a-zA-Z0-9._-]+$', folder_name) and '.' in folder_name:
+            return f'https://{reconstructed}'
         return None
     
     def _is_path_safe(self, file_path):
