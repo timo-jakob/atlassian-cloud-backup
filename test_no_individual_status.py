@@ -55,7 +55,7 @@ def test_no_individual_status_files():
         individual_status_files = []
         for root, dirs, files in os.walk(temp_dir):
             for file in files:
-                if file.endswith('status.json') and 'consolidated' not in file:
+                if file.endswith('status.json') and file != 'backup_status.json':
                     individual_status_files.append(os.path.join(root, file))
         
         if individual_status_files:

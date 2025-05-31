@@ -292,7 +292,7 @@ class FilesystemDiscovery:
         """
         THRESHOLD_ENTRIES = 1000000  # Maximum number of entries (1M files)
         THRESHOLD_SIZE = 1073741824000  # Maximum uncompressed size (1TB = 1000GB)
-        THRESHOLD_RATIO = 100  # Maximum compression ratio (higher threshold for legitimate backups)
+        THRESHOLD_RATIO = 300  # Maximum compression ratio (increased for legitimate Jira backups with ratios ~143-118)
         return THRESHOLD_ENTRIES, THRESHOLD_SIZE, THRESHOLD_RATIO
 
     def _validate_zip_file(self, file_path):
