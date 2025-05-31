@@ -662,7 +662,76 @@ class TestFilesystemDiscovery:
             warning_calls = [call[0][0] for call in mock_logging.warning.call_args_list]
             corrupted_warnings = [msg for msg in warning_calls if "corrupted" in msg.lower()]
             assert len(corrupted_warnings) >= 2  # At least one warning per corrupted file
-
+    
+    def test_zip_compression_ratio_overall_not_individual(self):
+        """
+        Test that ZIP validation uses overall compression ratio, not individual file ratios.
+        
+        This prevents false positives where legitimate files (like logs with repetitive content)
+        have high individual compression ratios but the overall ZIP ratio is reasonable.
+        
+        Addresses issue where legitimate Jira backups were rejected due to log files 
+        with compression ratios >300x, even though overall backup compression was normal.
+        """
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_zip:
+            zip_path = temp_zip.name
+        
+        try:
+            # Create ZIP with mixed compression characteristics
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+                # Highly compressible content (like repetitive log entries)
+                # This will have >300x individual compression ratio
+                repetitive_content = "ERROR: Database connection failed\n" * 20000  # ~660KB
+                zf.writestr("logs/application.log", repetitive_content)
+                
+                # Poorly compressible content to balance overall ratio
+                # Use pseudo-random data that compresses poorly
+                import random
+                random.seed(12345)  # Deterministic for testing
+                random_content = ''.join(chr(random.randint(32, 126)) for _ in range(200000))  # 200KB
+                zf.writestr("data/random_data.txt", random_content)
+                
+                # Normal content
+                normal_content = "Normal backup content with mixed data. " * 1000  # ~39KB
+                zf.writestr("backup/metadata.json", normal_content)
+            
+            # Verify our test setup: individual file should exceed threshold, overall should not
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                total_uncompressed = 0
+                total_compressed = 0
+                has_high_individual_ratio = False
+                
+                for info in zf.infolist():
+                    if not info.filename.endswith('/'):
+                        total_uncompressed += info.file_size
+                        total_compressed += info.compress_size
+                        
+                        if info.compress_size > 0:
+                            individual_ratio = info.file_size / info.compress_size
+                            if individual_ratio > 50:
+                                has_high_individual_ratio = True
+                
+                overall_ratio = total_uncompressed / total_compressed if total_compressed > 0 else 0
+                
+                # Verify test conditions
+                assert has_high_individual_ratio, "Test setup failed: no individual file exceeds 50x compression ratio"
+                assert overall_ratio < 50, "Test setup failed: overall compression ratio should be < 50x"
+            
+            # Test validation - should PASS with the fix
+            discovery = FilesystemDiscovery()
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                result = discovery._check_zip_bomb_safety(
+                    zf, zip_path,
+                    threshold_entries=1000000,    # 1M entries
+                    threshold_size=1000000000000, # 1TB  
+                    threshold_ratio=50            # 50x compression ratio (updated threshold)
+                )
+            
+            assert result, "ZIP with high individual file compression but normal overall compression should validate"
+            
+        finally:
+            if os.path.exists(zip_path):
+                os.unlink(zip_path)
 
 class TestFileManagerDiscoveryIntegration:
     """Test integration of filesystem discovery with FileManager."""
