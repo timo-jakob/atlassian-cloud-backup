@@ -75,5 +75,4 @@ def test_consolidated_status():
         
         print("✅ All tests passed! Consolidated status functionality working correctly.")
 
-if __name__ == '__main__':
-    test_consolidated_status()
+# Removed the __main__ guard to allow pytest discovery.
