@@ -92,7 +92,6 @@ def main():
     logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
     
     # Log information about the consolidated status file
-    from atlassian_cloud_backup.utils.file_utils import FileManager
     temp_fm = FileManager(urls[0], backup_target_directory=backup_target_directory)
     consolidated_status_file = temp_fm.get_consolidated_status_file()
     logging.info('Consolidated backup status will be saved to: %s', consolidated_status_file)
