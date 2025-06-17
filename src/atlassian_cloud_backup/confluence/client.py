@@ -167,14 +167,7 @@ class ConfluenceClient:
                 return False
             # Let other HTTP errors (including 412) bubble up to be handled by caller
             raise
-        except requests.exceptions.HTTPError as e:
-            # Handle legacy requests.exceptions.HTTPError for backward compatibility
-            if e.response is not None and e.response.status_code == 406:
-                logging.info('Confluence backup skipped (406 Not Acceptable - backup already in progress): %s', e.response.text)
-                return False
-            # Convert to standard HTTPError and re-raise
-            raise HTTPError(str(e), response=e.response) from e
-            
+        
         logging.info('Confluence backup triggered.')
         return True
 
