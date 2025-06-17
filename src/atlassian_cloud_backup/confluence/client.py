@@ -5,6 +5,7 @@ import time
 import logging
 import requests  # for HTTPError handling
 from datetime import datetime, timedelta, timezone
+from requests.exceptions import HTTPError
 
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
 
@@ -35,48 +36,6 @@ class ConfluenceClient:
         # Log the URL being used
         logging.info('Connecting to Confluence instance at %s', self.url)
         
-    def _should_skip_backup_due_to_recent_local(self, status, now):
-        """Checks if a recent local Confluence backup exists.
-
-        Args:
-            status (dict): Current backup status.
-            now (datetime): Current datetime.
-
-        Returns:
-            bool: True if a recent local backup exists and processing should be skipped.
-        """
-        local_confluence_file = status.get('confluence_file')
-        last_confluence_backup_time = status.get('last_confluence_backup')
-
-        if not (local_confluence_file and last_confluence_backup_time):
-            return False
-
-        if isinstance(last_confluence_backup_time, str):
-            try:
-                last_confluence_backup_time = datetime.fromisoformat(last_confluence_backup_time)
-            except ValueError:
-                logging.warning("Could not parse 'last_confluence_backup' timestamp: %s", last_confluence_backup_time)
-                return False
-
-        if not isinstance(last_confluence_backup_time, datetime):
-            logging.warning("Invalid type for 'last_confluence_backup_time': %s", type(last_confluence_backup_time))
-            return False
-
-        if last_confluence_backup_time.tzinfo is not None and now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        elif last_confluence_backup_time.tzinfo is None and now.tzinfo is not None:
-            last_confluence_backup_time = last_confluence_backup_time.replace(tzinfo=timezone.utc)
-        
-        backup_age = now - last_confluence_backup_time
-        if backup_age <= timedelta(days=7):
-            backup_date_str = last_confluence_backup_time.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
-            logging.info(
-                f"Existing Confluence backup from {backup_date_str} is recent enough "
-                f"(less than or equal to 7 days old). Skipping Confluence backup for {self.url}"
-            )
-            return True
-        return False
-
     def process_backup(self, status, now):
         """Handle Confluence backup process and return updated status.
         
@@ -87,46 +46,74 @@ class ConfluenceClient:
         Returns:
             dict: Updated backup status with 'confluence_action' key indicating the action taken
         """
-        if self._should_skip_backup_due_to_recent_local(status, now):
-            return {'confluence_action': 'SKIPPED_RECENT'}
+        logging.info('Starting Confluence backup process - always attempting to trigger new backup')
         
-        conf_status = self.get_backup_status()
-
-        # Skip if Confluence is not available or unlicensed
-        if conf_status is None:
-            logging.info('Skipping Confluence backup for %s', self.url)
+    def process_backup(self, status, now):
+        """Handle Confluence backup process and return updated status.
+        
+        Args:
+            status (dict): Current backup status
+            now (datetime): Current datetime
+            
+        Returns:
+            dict: Updated backup status with 'confluence_action' key indicating the action taken
+        """
+        logging.info('Starting Confluence backup process - always attempting to trigger new backup')
+        
+        # Check if Confluence is available first
+        if not self._is_confluence_available():
             return {'confluence_action': 'SKIPPED_UNAVAILABLE'}
         
-        if self._can_use_existing_backup(conf_status, now):
-            result = self._use_existing_backup(conf_status)
-            if result:
-                result['confluence_action'] = 'REUSED_EXISTING'
-            return result
-        
-        status = conf_status.get('currentStatus', '')
-        progress = conf_status.get('alternativePercentage', 0)
-        
-        if self._check_complete_status(status, progress):
-            # Backup is already complete, use it
-            logging.info('Confluence backup is already complete (status: %s, progress: %s). Using existing backup.', status, progress)
-            result = self._use_existing_backup(conf_status)
-            if result:
-                result['confluence_action'] = 'REUSED_EXISTING'
-            return result
-        elif self._is_backup_in_progress(status):
-            # Backup is in progress, wait for it to complete then use it
-            logging.info('Confluence backup is in progress (status: %s, progress: %s). Waiting for completion.', status, progress)
-            result = self._wait_for_existing_backup(conf_status, now)
-            if result:
-                result['confluence_action'] = 'WAITED_FOR_EXISTING'
-            return result
+        # Always try to trigger a new backup first
+        try:
+            return self._attempt_backup_trigger(now)
+        except HTTPError as e:
+            return self._handle_http_error(e)
+        except Exception as e:
+            logging.error('Unexpected error during Confluence backup trigger: %s', str(e))
+            return {'confluence_action': 'FAILED'}
+
+    def _is_confluence_available(self):
+        """Check if Confluence service is available."""
+        conf_status = self.get_backup_status()
+        if conf_status is None:
+            logging.info('Skipping Confluence backup for %s - service unavailable', self.url)
+            return False
+        return True
+
+    def _attempt_backup_trigger(self, now):
+        """Attempt to trigger a new backup."""
+        success = self.trigger_backup()
+        if success:
+            # HTTP 200 - backup triggered successfully
+            logging.info('Confluence backup triggered successfully')
+            return self._wait_and_download_backup(now)
         else:
-            # No backup in progress, trigger a new one
-            logging.info('Confluence backup is not running (status: %s, progress: %s). Creating new backup.', status, progress)
-            result = self._create_new_backup(now)
-            if result:
-                result['confluence_action'] = 'CREATED_NEW'
-            return result
+            # This handles the 406 case (backup already in progress)
+            logging.info('Confluence backup already in progress, waiting for completion')
+            return self._wait_and_download_backup(now, use_existing=True)
+
+    def _handle_http_error(self, e):
+        """Handle HTTP errors during backup trigger."""
+        if getattr(e, 'response', None) and e.response.status_code == 412:
+            return self._handle_frequency_limit_error(e)
+        else:
+            # Other HTTP errors, re-raise
+            logging.error('Unexpected error triggering Confluence backup: %s', str(e))
+            raise
+
+    def _handle_frequency_limit_error(self, e):
+        """Handle HTTP 412 - backup frequency limit."""
+        try:
+            error_data = e.response.json()
+            error_message = error_data.get('error', 'Backup frequency limit exceeded')
+        except (ValueError, AttributeError):
+            # Fallback if response is not JSON
+            error_message = e.response.text if hasattr(e.response, 'text') else str(e)
+        
+        print(f"\n⚠️  Confluence Backup Limitation: {error_message}")
+        logging.info('Confluence backup denied (HTTP 412): %s', error_message)
+        return {'confluence_action': 'SKIPPED_FREQUENCY_LIMIT'}
     
     def get_backup_status(self):
         """Check if a Confluence backup exists and get its status.
@@ -155,7 +142,11 @@ class ConfluenceClient:
         """Start a new Confluence backup.
         
         Returns:
-            bool: True if the backup was triggered successfully, False if skipped due to 406."""
+            bool: True if the backup was triggered successfully, False if skipped due to 406.
+            
+        Raises:
+            HTTPError: For HTTP errors other than 406 (including 412 which should be handled by caller)
+        """
         logging.info('Triggering Confluence backup...')
         endpoint = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/runbackup"
         logging.info('Confluence backup endpoint: %s', endpoint)
@@ -170,11 +161,13 @@ class ConfluenceClient:
                 'POST', endpoint, self.username, self.api_token,
                 headers=headers, json=payload
             )
-        except requests.exceptions.HTTPError as e:
+        except HTTPError as e:
             if e.response is not None and e.response.status_code == 406:
-                logging.info('Confluence backup skipped (406 Not Acceptable): %s', e.response.text)
+                logging.info('Confluence backup skipped (406 Not Acceptable - backup already in progress): %s', e.response.text)
                 return False
+            # Let other HTTP errors (including 412) bubble up to be handled by caller
             raise
+        
         logging.info('Confluence backup triggered.')
         return True
 
@@ -191,26 +184,36 @@ class ConfluenceClient:
         timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
         logging.info('Monitoring Confluence backup progress (timeout: %d minutes)...', timeout_minutes)
         
+        monitor_context = self._initialize_confluence_monitoring(timeout_minutes)
         url = f"{self.url.rstrip('/')}/wiki/rest/obm/1.0/getprogress.json"
-        start_time = datetime.now()
-        timeout_delta = timedelta(minutes=timeout_minutes)
         
         while True:
-            if self._is_timeout_exceeded(start_time, timeout_delta):
+            if self._is_timeout_exceeded(monitor_context['start_time'], monitor_context['timeout_delta']):
                 logging.error(f'Confluence backup timed out after {timeout_minutes} minutes')
                 return self._get_timeout_return_value(return_data)
                 
-            data = self._get_backup_status_data(url)
-            status = data.get('currentStatus', '')
-            progress = data.get('alternativePercentage', 0)
-            
-            self._log_backup_progress(status, progress, return_data)
-            
-            backup_result = self._evaluate_backup_status(status, progress, data, return_data)
+            backup_result = self._check_and_evaluate_backup_status(url, return_data)
             if backup_result is not None:
                 return backup_result
                 
             time.sleep(self.poll_interval)
+
+    def _initialize_confluence_monitoring(self, timeout_minutes):
+        """Initialize monitoring context for Confluence backup."""
+        return {
+            'start_time': datetime.now(),
+            'timeout_delta': timedelta(minutes=timeout_minutes)
+        }
+
+    def _check_and_evaluate_backup_status(self, url, return_data):
+        """Check backup status and evaluate if monitoring should continue."""
+        data = self._get_backup_status_data(url)
+        status = data.get('currentStatus', '')
+        progress = data.get('alternativePercentage', 0)
+        
+        self._log_backup_progress(status, progress, return_data)
+        
+        return self._evaluate_backup_status(status, progress, data, return_data)
     
     def _is_timeout_exceeded(self, start_time, timeout_delta):
         """Check if the backup operation has timed out.
@@ -290,62 +293,6 @@ class ConfluenceClient:
     def _check_complete_status(self, status, progress):
         return status == 'COMPLETE' or (status == 'Archiving attachments.' and progress == '100%')
     
-    def _is_backup_in_progress(self, status):
-        """Check if a backup is currently in progress on the server.
-        
-        Args:
-            status (str): Current backup status from server
-            
-        Returns:
-            bool: True if backup is in progress
-        """
-        # Statuses that indicate a backup is actively running
-        in_progress_statuses = [
-            'RUNNING', 'STARTED', 'PROGRESS', 'CREATING', 'ARCHIVING',
-            'Archiving attachments.', 'WORKING', 'PROCESSING'
-        ]
-        return status in in_progress_statuses or (
-            status and status not in ('COMPLETE', 'FAILED', 'ERROR', 'IDLE', 'NONE', '')
-        )
-    
-    def _wait_for_existing_backup(self, conf_status, now):
-        """Wait for an existing backup in progress to complete and use it.
-        
-        Args:
-            conf_status (dict): Current backup status from server
-            now (datetime): Current datetime
-            
-        Returns:
-            dict: Updated backup status
-        """
-        logging.info('Waiting for existing Confluence backup to complete...')
-        
-        # Wait for the existing backup to complete
-        backup_data = self.wait_for_completion(timeout_minutes=DEFAULT_TIMEOUT_MINUTES, return_data=True)
-        if not backup_data:
-            # If waiting failed, fall back to creating a new backup
-            logging.warning('Failed to wait for existing backup, creating new one')
-            return self._create_new_backup(now)
-        
-        # Use the completed backup
-        updated = {}
-        conf_file = self.wait_for_file()
-        if conf_file:
-            # Use the server's backup timestamp if available, otherwise use now
-            conf_time = backup_data.get('time')
-            if conf_time:
-                try:
-                    conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
-                    updated['last_confluence_backup'] = conf_timestamp
-                except (ValueError, TypeError):
-                    updated['last_confluence_backup'] = now
-            else:
-                updated['last_confluence_backup'] = now
-            updated['confluence_file'] = conf_file
-            logging.info('Successfully waited for and downloaded existing Confluence backup')
-            
-        return updated
-    
     def wait_for_file(self):
         """Wait for Confluence backup to complete and download the file.
         
@@ -408,73 +355,32 @@ class ConfluenceClient:
         logging.info('Downloading Confluence backup from: %s', url)
         return download_file(url, local_filename, self.username, self.api_token, "Confluence")
     
-    def _can_use_existing_backup(self, conf_status, now):
-        """Check if an existing Confluence backup can be used.
+    def _wait_and_download_backup(self, now, use_existing=False):
+        """Wait for backup completion and download the file.
         
         Args:
-            conf_status (dict): Current backup status
             now (datetime): Current datetime
-            
-        Returns:
-            bool: True if the existing backup can be used
-        """
-        conf_time = conf_status.get('time')
-        if not conf_time:
-            return False
-
-        try:
-            conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
-            one_week_ago = now - timedelta(days=7)
-            is_outdated = conf_status.get('isOutdated', True)
-            
-            return (not is_outdated and 
-                    conf_timestamp > one_week_ago and 
-                    conf_status.get('currentStatus') == 'COMPLETE')
-        except (ValueError, TypeError):
-            logging.warning('Invalid timestamp in Confluence backup status: %s', conf_time)
-            return False
-
-    def _use_existing_backup(self, conf_status):
-        """Use and download an existing Confluence backup.
-        
-        Args:
-            conf_status (dict): Current backup status
+            use_existing (bool): Whether we're using an existing backup in progress
             
         Returns:
             dict: Updated backup status
         """
-        updated = {}
-        conf_time = conf_status.get('time')
-        conf_timestamp = datetime.fromtimestamp(conf_time / 1000, tz=timezone.utc)
+        action = 'WAITED_FOR_EXISTING' if use_existing else 'CREATED_NEW'
         
-        logging.info('Using existing Confluence backup from %s', 
-                    conf_timestamp.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z'))
+        logging.info('Waiting for Confluence backup to complete...')
+        if not self.wait_for_completion():
+            logging.error('Confluence backup failed to complete or timed out')
+            return {'confluence_action': 'FAILED'}
         
+        # Download the backup file
         conf_file = self.wait_for_file()
         if conf_file:
-            updated['last_confluence_backup'] = conf_timestamp
-            updated['confluence_file'] = conf_file
-            logging.info('Downloaded existing Confluence backup')
-            
-        return updated
-
-    def _create_new_backup(self, now):
-        """Create a new Confluence backup.
-        
-        Args:
-            now (datetime): Current datetime
-            
-        Returns:
-            dict: Updated backup status
-        """
-        updated = {}
-        logging.info('Creating new Confluence backup')
-        
-        self.trigger_backup()
-        if self.wait_for_completion():
-            conf_file = self.wait_for_file()
-            if conf_file:
-                updated['last_confluence_backup'] = now
-                updated['confluence_file'] = conf_file
-                
-        return updated
+            logging.info('Successfully downloaded Confluence backup: %s', conf_file)
+            return {
+                'last_confluence_backup': now,
+                'confluence_file': conf_file,
+                'confluence_action': action
+            }
+        else:
+            logging.error('Failed to download Confluence backup file')
+            return {'confluence_action': 'FAILED'}

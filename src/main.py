@@ -35,6 +35,52 @@ def get_config_value(env_var, prop_key, default=None):
         return config['atlassian'][prop_key]
     return default
 
+def validate_credentials(username, api_token):
+    """Validate that required credentials are provided."""
+    if not all([username, api_token]):
+        logging.error(
+            'Missing ATLASSIAN_USERNAME/username or ATLASSIAN_API_TOKEN/api_token in environment variables or properties file.'
+        )
+        return False
+    return True
+
+def process_single_backup(url, username, api_token, poll_interval, backup_target_directory, jira_backup_timeout_minutes):
+    """Process backup for a single Atlassian instance.
+    
+    Returns:
+        bool: True if backup was successful, False otherwise
+    """
+    try:
+        logging.info('Starting backup for Atlassian instance: %s', url)
+        controller = BackupController(
+            url=url,
+            username=username,
+            api_token=api_token,
+            poll_interval=poll_interval,
+            backup_target_directory=backup_target_directory,
+            jira_backup_timeout_minutes=jira_backup_timeout_minutes
+        )
+        controller.orchestrate()
+        logging.info('Completed backup for %s', url)
+        return True
+    except Exception as e:
+        logging.error('Failed to backup %s: %s', url, str(e))
+        return False
+
+def get_runtime_configuration():
+    """Get runtime configuration values.
+    
+    Returns:
+        dict: Configuration dictionary with parsed values
+    """
+    return {
+        'username': get_config_value('ATLASSIAN_USERNAME', 'username'),
+        'api_token': get_config_value('ATLASSIAN_API_TOKEN', 'api_token'),
+        'poll_interval': int(get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')),
+        'backup_target_directory': get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory'),
+        'jira_backup_timeout_minutes': int(get_config_value('JIRA_BACKUP_TIMEOUT_MINUTES', 'jira_backup_timeout_minutes', '480'))
+    }
+
 @click.command()
 def main():
     """
@@ -76,18 +122,16 @@ def main():
         logging.error('No valid Atlassian instances provided. Set ATLASSIAN_INSTANCES environment variable or "instances" in properties file.')
         sys.exit(1)
         
-    username = get_config_value('ATLASSIAN_USERNAME', 'username')
-    api_token = get_config_value('ATLASSIAN_API_TOKEN', 'api_token')
-    poll_interval_str = get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')
-    poll_interval = int(poll_interval_str)
-    backup_target_directory = get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory')
-    jira_backup_timeout_minutes_str = get_config_value('JIRA_BACKUP_TIMEOUT_MINUTES', 'jira_backup_timeout_minutes', '480')
-    jira_backup_timeout_minutes = int(jira_backup_timeout_minutes_str)
+    # Get runtime configuration values
+    runtime_config = get_runtime_configuration()
+    username = runtime_config['username']
+    api_token = runtime_config['api_token']
+    poll_interval = runtime_config['poll_interval']
+    backup_target_directory = runtime_config['backup_target_directory']
+    jira_backup_timeout_minutes = runtime_config['jira_backup_timeout_minutes']
 
-    if not all([username, api_token]):
-        logging.error(
-            'Missing ATLASSIAN_USERNAME/username or ATLASSIAN_API_TOKEN/api_token in environment variables or properties file.'
-        )
+    # Validate credentials
+    if not validate_credentials(username, api_token):
         sys.exit(1)
     
     logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
@@ -99,21 +143,9 @@ def main():
     
     success_count = 0
     for url in urls:
-        try:
-            logging.info('Starting backup for Atlassian instance: %s', url)
-            controller = BackupController(
-                url=url,
-                username=username,
-                api_token=api_token,
-                poll_interval=poll_interval,
-                backup_target_directory=backup_target_directory,
-                jira_backup_timeout_minutes=jira_backup_timeout_minutes
-            )
-            controller.orchestrate()
+        # Process backup for each URL
+        if process_single_backup(url, username, api_token, poll_interval, backup_target_directory, jira_backup_timeout_minutes):
             success_count += 1
-            logging.info('Completed backup for %s', url)
-        except Exception as e:
-            logging.error('Failed to backup %s: %s', url, str(e))
             
     logging.info('Backup completed for %d of %d Atlassian instances', success_count, len(urls))
 

@@ -53,34 +53,28 @@ class BackupController:
         """
         Main controller method to coordinate backup operations.
         
-        Orchestrates Jira and Confluence backup processes, loading and saving
-        status information along the way.
+        Always attempts fresh backups without considering previous status or local files.
         
         Returns:
             bool: True if at least one backup was performed
         """
-        # Load current backup status from consolidated file
-        consolidated_status = self.file_manager.load_consolidated_status()
-        status = consolidated_status.get(self.url, {})
         now = datetime.now(timezone.utc)
         updated = {}
 
-        # Log last backup times in local timezone
-        self._log_last_backup_times(status)
+        logging.info('Starting fresh backup process for %s', self.url)
 
-        # Process Jira backup
-        jira_updates = self._process_jira_backup(status, now)
+        # Process Jira backup (always fresh)
+        jira_updates = self._process_jira_backup({}, now)
         updated.update(jira_updates)
 
-        # Process Confluence backup
-        confluence_updates = self._process_confluence_backup(status, now)
+        # Process Confluence backup (always fresh)
+        confluence_updates = self._process_confluence_backup({}, now)
         updated.update(confluence_updates)
 
         # Save updates if any changes were made
         if updated:
-            merged = {**status, **updated}
             # Update consolidated status file
-            self.file_manager.update_site_in_consolidated_status(merged)
+            self.file_manager.update_site_in_consolidated_status(updated)
             return True
         
         return False
@@ -138,10 +132,14 @@ class BackupController:
             
         jira_file = jira_updates.get('jira_file')
         
-        if jira_action == 'REUSED_EXISTING':
-            self._log_jira_audit('SKIPPED', jira_file, self._get_file_size(jira_file), 'Reused existing backup')
-        elif jira_action == 'CREATED_NEW':
-            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file))
+        if jira_action == 'CREATED_NEW':
+            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), 'New backup created')
+        elif jira_action == 'REUSED_EXISTING':
+            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), 'Downloaded existing server backup (frequency limit)')
+        elif jira_action == 'NO_UPDATE_NEEDED':
+            self._log_jira_audit('SKIPPED', None, None, 'Server backup not newer than local (frequency limit)')
+        elif jira_action == 'FAILED':
+            self._log_jira_audit('FAILED', None, None, 'Backup process failed')
     
     def _handle_confluence_audit_logging(self, confluence_updates):
         """
@@ -156,36 +154,16 @@ class BackupController:
             
         confluence_file = confluence_updates.get('confluence_file')
         
-        if confluence_action in ('SKIPPED_RECENT', 'SKIPPED_UNAVAILABLE'):
-            reason = 'Recent backup exists' if confluence_action == 'SKIPPED_RECENT' else 'Service unavailable'
-            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), reason)
-        elif confluence_action in ('REUSED_EXISTING', 'WAITED_FOR_EXISTING'):
-            reason = 'Reused existing backup' if confluence_action == 'REUSED_EXISTING' else 'Waited for existing backup'
-            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), reason)
-        elif confluence_action == 'CREATED_NEW':
-            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file))
-            
-    def _log_last_backup_times(self, status):
-        """Log the last backup times in local timezone.
-        
-        Args:
-            status (dict): Current backup status
-        """
-        datetime_format = '%Y-%m-%d %H:%M:%S %Z'
-        
-        # Log Jira backup time if available
-        last_jira = status.get('last_jira_backup')
-        if last_jira:
-            local_jira = last_jira.astimezone()
-            logging.info('Last Jira backup was at %s (local time)', 
-                         local_jira.strftime(datetime_format))
-        
-        # Log Confluence backup time if available
-        last_conf = status.get('last_confluence_backup')
-        if last_conf:
-            local_conf = last_conf.astimezone()
-            logging.info('Last Confluence backup was at %s (local time)', 
-                         local_conf.strftime(datetime_format))
+        if confluence_action == 'CREATED_NEW':
+            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), 'New backup created')
+        elif confluence_action == 'WAITED_FOR_EXISTING':
+            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), 'Waited for existing backup in progress')
+        elif confluence_action == 'SKIPPED_FREQUENCY_LIMIT':
+            self._log_confluence_audit('SKIPPED', None, None, 'Backup denied due to frequency limits')
+        elif confluence_action == 'SKIPPED_UNAVAILABLE':
+            self._log_confluence_audit('SKIPPED', None, None, 'Service unavailable or unlicensed')
+        elif confluence_action == 'FAILED':
+            self._log_confluence_audit('FAILED', None, None, 'Backup process failed')
 
     def _log_jira_audit(self, status, filename=None, filesize=None, reason=None):
         """Log audit entry for Jira backup operation."""
