@@ -15,6 +15,7 @@ from atlassian_cloud_backup.utils.file_utils import FileManager # Ensure FileMan
 # Default timeout of 6 hours (360 minutes), can be overridden with environment variable
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
 DATEIME_FORMAT_STR = '%Y-%m-%d %H:%M:%S %Z'
+APPLICATION_JSON = 'application/json'
 
 class JiraClient:
     """Client for handling Jira backup operations."""
@@ -174,7 +175,7 @@ class JiraClient:
             lasttask_response = session.get(
                 lasttask_url,
                 auth=(self.username, self.api_token),
-                headers={'Accept': 'application/json'},
+                headers={'Accept': APPLICATION_JSON},
                 timeout=30
             )
             lasttask_response.raise_for_status()
@@ -203,8 +204,8 @@ class JiraClient:
                 json=backup_payload,
                 auth=(self.username, self.api_token),
                 headers={
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
+                    'Accept': APPLICATION_JSON,
+                    'Content-Type': APPLICATION_JSON
                 },
                 timeout=60
             )
@@ -553,7 +554,7 @@ class JiraClient:
             # For HTTP 412, display the error message and raise RuntimeError
             # This will be caught by process_backup() which will handle frequency limit
             self._display_frequency_limit_message(error)
-            raise RuntimeError(f"Jira backup denied due to frequency limit")
+            raise RuntimeError("Jira backup denied due to frequency limit")
         elif status_code == 500:
             return self._handle_server_error()
         else:
@@ -578,10 +579,10 @@ class JiraClient:
                 response_message = error.response.text.strip() if error.response.text else str(error)
         
         # Display the actual server response message to stdout
-        print(f"\n⚠️  Jira Backup Frequency Limit Reached")
-        print(f"📋 Server Response: {response_message}")
-        print(f"⏳ Please wait before attempting another backup")
-        print(f"💡 You can check for existing backups or wait for the frequency limit to reset\n")
+        print("\n⚠️  Jira Backup Frequency Limit Reached")
+        print("📋 Server Response: {response_message}")
+        print("⏳ Please wait before attempting another backup")
+        print("💡 You can check for existing backups or wait for the frequency limit to reset\n")
         
         logging.error('Jira backup request denied (HTTP 412): %s', response_message)
     
