@@ -152,14 +152,25 @@ class JiraClient:
         Returns:
             Response: HTTP response from backup trigger or None if skipped
         """
-        import requests
+        session = self._initialize_session()
 
-        session = requests.Session()
+        try:
+            self._establish_session_cookies(session)
+            return self._post_backup_request(session, local_task_id)
+        finally:
+            session.close()
+
+    def _initialize_session(self):
+        """Initialize a new session."""
+        import requests
+        return requests.Session()
+
+    def _establish_session_cookies(self, session):
+        """Establish session cookies by calling the lastTaskId endpoint."""
+        lasttask_url = f"{self.url.rstrip('/')}/rest/backup/1/export/lastTaskId"
         logging.debug('Getting cookies from lastTaskId endpoint for backup trigger')
 
         try:
-            # Step 1: Call lastTaskId to establish session and get cookies
-            lasttask_url = f"{self.url.rstrip('/')}/rest/backup/1/export/lastTaskId"
             lasttask_response = session.get(
                 lasttask_url,
                 auth=(self.username, self.api_token),
@@ -169,21 +180,20 @@ class JiraClient:
             lasttask_response.raise_for_status()
             logging.debug('Successfully called lastTaskId endpoint and obtained session cookies')
 
-            # Log the cookies we got (for debugging)
             if session.cookies:
                 cookie_names = [cookie.name for cookie in session.cookies]
                 logging.debug('Obtained cookies: %s', ', '.join(cookie_names))
             else:
                 logging.warning('No cookies obtained from lastTaskId endpoint')
-
         except requests.exceptions.RequestException as e:
             logging.error('Failed to get cookies from lastTaskId endpoint: %s', str(e))
             raise HTTPError(f"Failed to get session cookies: {str(e)}")
 
-        # Step 2: Use session cookies to trigger backup (don't use auth header)
+    def _post_backup_request(self, session, local_task_id):
+        """Send a POST request to trigger the backup."""
         backup_url = f"{self.url.rstrip('/')}/rest/backup/1/export/runbackup"
         backup_payload = {
-            "cbAttachments": "true",  # Use string format like the bash script
+            "cbAttachments": "true",
             "exportToCloud": "true"
         }
 
@@ -203,39 +213,38 @@ class JiraClient:
             return response
 
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 412:
-                logging.info('Backup trigger denied due to frequency limit (HTTP 412). Fetching lastTaskId.')
-                server_task_id = self.fetch_last_task_id()
-
-                if server_task_id is None:
-                    logging.warning('No task ID found on server despite frequency limit error')
-                    return None
-
-                logging.info('Server task ID: %d, Local task ID: %s', server_task_id, local_task_id)
-
-                if local_task_id is not None and server_task_id <= local_task_id:
-                    logging.info('Server task ID %d is not newer than local task ID %d, skipping backup', 
-                                 server_task_id, local_task_id)
-                    return None
-
-                logging.info('Server has newer backup (task %d), attempting download', server_task_id)
-                self._download_existing_backup(server_task_id, datetime.now(timezone.utc))
-                return None
-
-            raise  # Re-raise other HTTP errors
+            return self._handle_http_error(e, local_task_id)
 
         except requests.exceptions.RequestException as e:
             logging.error('Failed to trigger Jira backup with cookies: %s', str(e))
-            # Convert to HTTPError for consistent error handling
             if hasattr(e, 'response') and e.response is not None:
                 raise HTTPError(f"HTTP {e.response.status_code}: {e.response.text}", response=e.response)
             else:
                 raise HTTPError(f"Request failed: {str(e)}")
 
-        finally:
-            # Clean up session
-            session.close()
-        
+    def _handle_http_error(self, error, local_task_id):
+        """Handle HTTP errors during the backup trigger."""
+        if error.response.status_code == 412:
+            logging.info('Backup trigger denied due to frequency limit (HTTP 412). Fetching lastTaskId.')
+            server_task_id = self.fetch_last_task_id()
+
+            if server_task_id is None:
+                logging.warning('No task ID found on server despite frequency limit error')
+                return None
+
+            logging.info('Server task ID: %d, Local task ID: %s', server_task_id, local_task_id)
+
+            if local_task_id is not None and server_task_id <= local_task_id:
+                logging.info('Server task ID %d is not newer than local task ID %d, skipping backup', 
+                             server_task_id, local_task_id)
+                return None
+
+            logging.info('Server has newer backup (task %d), attempting download', server_task_id)
+            self._download_existing_backup(server_task_id, datetime.now(timezone.utc))
+            return None
+
+        raise
+
     def wait_for_completion(self, task_id, timeout_minutes=None):
         """Wait until a Jira backup task completes.
         
