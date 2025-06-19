@@ -136,10 +136,12 @@ def main():
     
     logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
     
-    # Log information about the consolidated status file
+    # Log information about the consolidated status file and audit log
     temp_fm = FileManager(urls[0], backup_target_directory=backup_target_directory)
     consolidated_status_file = temp_fm.get_consolidated_status_file()
+    audit_log_file = temp_fm.get_audit_log_path()
     logging.info('Backup status will be saved to: %s', consolidated_status_file)
+    logging.info('Audit logs will be written to: %s', audit_log_file)
     
     success_count = 0
     for url in urls:

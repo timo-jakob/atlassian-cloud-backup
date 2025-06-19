@@ -16,6 +16,7 @@ from atlassian_cloud_backup.utils.file_utils import FileManager # Ensure FileMan
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
 DATEIME_FORMAT_STR = '%Y-%m-%d %H:%M:%S %Z'
 APPLICATION_JSON = 'application/json'
+NEW_JIRA_TRIGGERED = 'New Jira backup triggered successfully with task ID: %d'
 
 class JiraClient:
     """Client for handling Jira backup operations."""
@@ -55,28 +56,38 @@ class JiraClient:
         """
         logging.info('Starting Jira backup process - always attempting to trigger new backup first')
         
-        # Step 1: Always try to trigger a new backup first
         try:
-            task_id = self.trigger_backup()
-            # If we get here, the trigger was successful (HTTP 200)
-            logging.info('New Jira backup triggered successfully with task ID: %d', task_id)
-            new_backup = self._wait_and_download_backup(task_id, now)
-            if new_backup:
-                new_backup['jira_action'] = 'CREATED_NEW'
-                return new_backup
+            result = self.trigger_backup()
+            
+            # Handle dictionary result with action
+            if isinstance(result, dict) and 'action' in result:
+                action = result['action']
+                
+                # Use a dispatch table to handle different actions
+                action_handlers = {
+                    'new_backup': lambda: self._handle_new_backup(result['task_id'], now),
+                    'downloaded': lambda: self._handle_downloaded_backup(result['backup_data']),
+                    'skipped': lambda: self._handle_skipped_backup(),
+                    'no_server_backup': lambda: self._handle_no_server_backup(),
+                    'download_failed': lambda: self._handle_download_failed()
+                }
+                
+                # Execute the appropriate handler if action is recognized
+                if action in action_handlers:
+                    return action_handlers[action]()
+                else:
+                    logging.error('Unknown action from trigger_backup: %s', action)
+                    return {}
+            
+            # Handle legacy integer result (task ID)
+            elif isinstance(result, int):
+                return self._handle_new_backup(result, now)
+            
+            # Handle unexpected result
             else:
-                logging.error('Failed to complete new backup process')
+                logging.error('Unexpected result from trigger_backup: %s', result)
                 return {}
                 
-        except RuntimeError as e:
-            # Check if this is a 412 error (backup frequency limit)
-            if "backup denied" in str(e).lower() or "frequency limit" in str(e).lower():
-                logging.info('New backup denied due to frequency limits, checking for existing backup on server')
-                print("🔍 Checking for existing backups on the server...")
-                return self._handle_backup_frequency_limit(status, now)
-            else:
-                # Other runtime errors, re-raise
-                raise
         except Exception as e:
             logging.error('Unexpected error during backup trigger: %s', str(e))
             return {}
@@ -131,17 +142,20 @@ class JiraClient:
         """Start a new Jira backup.
         
         Returns:
-            int: Task ID of the new backup
+            int or dict: Task ID of the new backup, or backup result dict if 412 handled
         """
         logging.info('Triggering Jira backup via POST /rest/backup/1/export/runbackup')
         
+        # Get local task ID from existing backup files
+        file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
+        local_task_id = file_manager.get_latest_jira_task_id_from_files()
+        
         try:
             # Use session-based authentication for backup trigger
-            response = self._trigger_backup_with_session()
+            result = self._trigger_backup_with_session(local_task_id)
+            return result
         except HTTPError as e:
             return self._handle_backup_trigger_error(e)
-        
-        return self._extract_task_id_from_response(response)
     
     def _trigger_backup_with_session(self, local_task_id=None):
         """Trigger backup using lastTaskId endpoint to get cookies.
@@ -211,10 +225,12 @@ class JiraClient:
             )
             response.raise_for_status()
             logging.info('Jira backup triggered successfully using cookies from lastTaskId')
-            return response
+            task_id = self._extract_task_id_from_response(response)
+            return {'action': 'new_backup', 'task_id': task_id}
 
         except requests.exceptions.HTTPError as e:
-            return self._handle_http_error(e, local_task_id)
+            result = self._handle_http_error(e, local_task_id)
+            return result
 
         except requests.exceptions.RequestException as e:
             logging.error('Failed to trigger Jira backup with cookies: %s', str(e))
@@ -231,18 +247,21 @@ class JiraClient:
 
             if server_task_id is None:
                 logging.warning('No task ID found on server despite frequency limit error')
-                return None
+                return {'action': 'no_server_backup'}
 
             logging.info('Server task ID: %d, Local task ID: %s', server_task_id, local_task_id)
 
             if local_task_id is not None and server_task_id <= local_task_id:
                 logging.info('Server task ID %d is not newer than local task ID %d, skipping backup', 
                              server_task_id, local_task_id)
-                return None
+                return {'action': 'skipped', 'reason': 'local_current'}
 
             logging.info('Server has newer backup (task %d), attempting download', server_task_id)
-            self._download_existing_backup(server_task_id, datetime.now(timezone.utc))
-            return None
+            backup_result = self._download_existing_backup(server_task_id, datetime.now(timezone.utc))
+            if backup_result:
+                return {'action': 'downloaded', 'backup_data': backup_result}
+            else:
+                return {'action': 'download_failed'}
 
         raise
 
@@ -389,49 +408,6 @@ class JiraClient:
             logging.error("Jira backup download failed for task %d: %s", task_id, e)
             raise RuntimeError(f"Failed to download Jira backup for task {task_id}") from e
     
-    def _handle_backup_frequency_limit(self, status, now):
-        """Handle the case when backup is denied due to frequency limits (HTTP 412).
-        
-        Args:
-            status (dict): Current backup status
-            now (datetime): Current datetime
-            
-        Returns:
-            dict: Updated backup status or empty dict if no suitable backup found
-        """
-        logging.info('Checking server for existing backup due to frequency limit')
-        print("🔍 Searching for existing backups on the server...")
-        
-        # Get the last task ID from the server
-        server_task_id = self.fetch_last_task_id()
-        if server_task_id is None:
-            logging.warning('No task ID found on server despite frequency limit error')
-            print("❌ No existing backups found on the server")
-            return {}
-        
-        local_task_id = status.get('jira_task_id')
-        logging.info('Server task ID: %d, Local task ID: %s', server_task_id, local_task_id)
-        print(f"📊 Server backup task ID: {server_task_id}")
-        if local_task_id:
-            print(f"📊 Local backup task ID: {local_task_id}")
-        
-        # Only proceed if server task ID is higher (newer) than local task ID
-        if local_task_id is not None and server_task_id <= local_task_id:
-            logging.info('Server task ID %d is not newer than local task ID %d, no update needed', 
-                        server_task_id, local_task_id)
-            print("✅ Local backup is already up to date - no action needed")
-            result = dict(status)
-            result['jira_action'] = 'NO_UPDATE_NEEDED'
-            return result
-        
-        # Server has a newer backup, try to download it
-        logging.info('Server has newer backup (task %d), attempting download', server_task_id)
-        print(f"📥 Found newer backup on server (task {server_task_id}) - downloading...")
-        existing_backup = self._download_existing_backup(server_task_id, now)
-        if existing_backup:
-            existing_backup['jira_action'] = 'REUSED_EXISTING'
-        return existing_backup
-    
     def _wait_and_download_backup(self, task_id, now):
         """Wait for backup completion and download the file.
         
@@ -469,7 +445,7 @@ class JiraClient:
                 backup_datetime_for_filename = datetime.fromtimestamp(submitted_ms / 1000, tz=timezone.utc)
 
             file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
-            backup_filepath = file_manager.prepare_backup_path("Jira", backup_datetime=backup_datetime_for_filename)
+            backup_filepath = file_manager.prepare_jira_backup_path(task_id, backup_datetime=backup_datetime_for_filename)
             
             logging.info('Downloading Jira backup for task %d to %s', task_id, backup_filepath)
             downloaded_file = self.download_backup_file(task_id, backup_filepath)
@@ -492,8 +468,7 @@ class JiraClient:
             logging.info('Successfully downloaded and verified Jira backup: %s (task %d)', downloaded_file, task_id)
             return {
                 'last_jira_backup': backup_datetime_for_filename,
-                'jira_file': downloaded_file,
-                'jira_task_id': task_id
+                'jira_file': downloaded_file
             }
             
         except Exception as e:
@@ -542,49 +517,17 @@ class JiraClient:
             int: Task ID if fallback is successful
             
         Raises:
-            RuntimeError: If backup is denied or fallback fails
-            HTTPError: For other HTTP errors
+            HTTPError: For HTTP errors
         """
         if not getattr(error, 'response', None):
             raise error
         
         status_code = error.response.status_code
         
-        if status_code == 412:
-            # For HTTP 412, display the error message and raise RuntimeError
-            # This will be caught by process_backup() which will handle frequency limit
-            self._display_frequency_limit_message(error)
-            raise RuntimeError("Jira backup denied due to frequency limit")
-        elif status_code == 500:
+        if status_code == 500:
             return self._handle_server_error()
         else:
             raise error
-    
-    def _display_frequency_limit_message(self, error):
-        """Display HTTP 412 frequency limit error message to user.
-        
-        Args:
-            error (HTTPError): The HTTP error that occurred
-        """
-        # Extract the actual response message from the HTTP response body
-        response_message = "Backup frequency limit exceeded"
-        
-        if hasattr(error, 'response') and error.response is not None:
-            try:
-                # Try to get JSON error message first
-                error_data = error.response.json()
-                response_message = error_data.get('error', error.response.text.strip())
-            except (ValueError, AttributeError):
-                # Fall back to raw response text
-                response_message = error.response.text.strip() if error.response.text else str(error)
-        
-        # Display the actual server response message to stdout
-        print("\n⚠️  Jira Backup Frequency Limit Reached")
-        print("📋 Server Response: {response_message}")
-        print("⏳ Please wait before attempting another backup")
-        print("💡 You can check for existing backups or wait for the frequency limit to reset\n")
-        
-        logging.error('Jira backup request denied (HTTP 412): %s', response_message)
     
     def _handle_server_error(self):
         """Handle HTTP 500 server errors with fallback to lastTaskId.
@@ -626,3 +569,64 @@ class JiraClient:
         
         logging.info('Jira backup triggered, task ID: %s', task_id)
         return int(task_id)
+
+    def _handle_new_backup(self, task_id, now):
+        """Handle new backup process.
+        
+        Args:
+            task_id: The task ID to process
+            now: Current datetime
+            
+        Returns:
+            dict: Backup information or empty dict if failed
+        """
+        logging.info(NEW_JIRA_TRIGGERED, task_id)
+        new_backup = self._wait_and_download_backup(task_id, now)
+        if new_backup:
+            new_backup['jira_action'] = 'CREATED_NEW'
+            return new_backup
+        else:
+            logging.error('Failed to complete new backup process')
+            return {}
+            
+    def _handle_downloaded_backup(self, backup_data):
+        """Handle downloaded backup data.
+        
+        Args:
+            backup_data: The downloaded backup data
+            
+        Returns:
+            dict: Backup information
+        """
+        backup_data['jira_action'] = 'REUSED_EXISTING'
+        return backup_data
+        
+    def _handle_skipped_backup(self):
+        """Handle skipped backup scenario.
+        
+        Returns:
+            dict: Action information
+        """
+        logging.info("Backup skipped as local version is current.")
+        return {'jira_action': 'NO_UPDATE_NEEDED'}
+        
+    def _handle_no_server_backup(self):
+        """Handle no server backup available scenario.
+        
+        Returns:
+            dict: Empty dict
+        """
+        logging.warning("No server backup available despite frequency limit.")
+        return {}
+        
+    def _handle_download_failed(self):
+        """Handle download failure scenario.
+        
+        Returns:
+            dict: Empty dict
+        """
+        logging.warning("Backup download failed.")
+        return {}
+    
+    # The process_backup method has been moved to the top of the class
+    # and refactored to reduce cognitive complexity

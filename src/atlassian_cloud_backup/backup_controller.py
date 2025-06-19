@@ -137,7 +137,7 @@ class BackupController:
         elif jira_action == 'REUSED_EXISTING':
             self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), 'Downloaded existing server backup (frequency limit)')
         elif jira_action == 'NO_UPDATE_NEEDED':
-            self._log_jira_audit('SKIPPED', None, None, 'Server backup not newer than local (frequency limit)')
+            self._log_jira_audit('SKIPPED', None, None, self.JIRA_SKIP_REASON_FREQUENCY_LIMIT)
         elif jira_action == 'FAILED':
             self._log_jira_audit('FAILED', None, None, 'Backup process failed')
     
@@ -167,11 +167,13 @@ class BackupController:
 
     def _log_jira_audit(self, status, filename=None, filesize=None, reason=None):
         """Log audit entry for Jira backup operation."""
-        AuditLogger.log('Jira', self.url, status, filename, filesize, reason)
+        audit_log_path = self.file_manager.get_audit_log_path()
+        AuditLogger.log('Jira', self.url, status, filename, filesize, reason, audit_log_path)
     
     def _log_confluence_audit(self, status, filename=None, filesize=None, reason=None):
         """Log audit entry for Confluence backup operation."""
-        AuditLogger.log('Confluence', self.url, status, filename, filesize, reason)
+        audit_log_path = self.file_manager.get_audit_log_path()
+        AuditLogger.log('Confluence', self.url, status, filename, filesize, reason, audit_log_path)
     
     def _get_file_size(self, filename):
         """Get file size in bytes if file exists."""
