@@ -16,6 +16,7 @@ from atlassian_cloud_backup.utils.file_utils import FileManager # Ensure FileMan
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
 DATEIME_FORMAT_STR = '%Y-%m-%d %H:%M:%S %Z'
 APPLICATION_JSON = 'application/json'
+NEW_JIRA_TRIGGERED = 'New Jira backup triggered successfully with task ID: %d'
 
 class JiraClient:
     """Client for handling Jira backup operations."""
@@ -65,7 +66,7 @@ class JiraClient:
                 if action == 'new_backup':
                     # Normal case - got a task ID, proceed with download
                     task_id = result['task_id']
-                    logging.info('New Jira backup triggered successfully with task ID: %d', task_id)
+                    logging.info(NEW_JIRA_TRIGGERED, task_id)
                     new_backup = self._wait_and_download_backup(task_id, now)
                     if new_backup:
                         new_backup['jira_action'] = 'CREATED_NEW'
@@ -87,18 +88,18 @@ class JiraClient:
                 
                 elif action == 'no_server_backup':
                     # No server backup available despite 412 error
-                    logging.warning("Jira backup action '%s' resulted in no backup.", action)
+                    logging.warning("Jira backup action '%s' resulted in no backup because of frequency limit.", action)
                     return {}
                 
                 elif action == 'download_failed':
                     # Failed to download existing backup
-                    logging.warning("Jira backup action '%s' resulted in no backup.", action)
+                    logging.warning("Jira backup action '%s' resulted in no backup because it failed.", action)
                     return {}
                     
             elif isinstance(result, int):
                 # Legacy case - got a task ID directly
                 task_id = result
-                logging.info('New Jira backup triggered successfully with task ID: %d', task_id)
+                logging.info(NEW_JIRA_TRIGGERED, task_id)
                 new_backup = self._wait_and_download_backup(task_id, now)
                 if new_backup:
                     new_backup['jira_action'] = 'CREATED_NEW'
@@ -600,7 +601,7 @@ class JiraClient:
             logging.error("New backup action triggered, but no task_id found in result.")
             return {}
 
-        logging.info('New Jira backup triggered successfully with task ID: %d', task_id)
+        logging.info(NEW_JIRA_TRIGGERED, task_id)
         new_backup = self._wait_and_download_backup(task_id, now)
         if new_backup:
             new_backup['jira_action'] = 'CREATED_NEW'
@@ -618,7 +619,7 @@ class JiraClient:
         backup_data['jira_action'] = 'REUSED_EXISTING'
         return backup_data
 
-    def _handle_skipped(self, result):
+    def _handle_skipped(self):
         """Handle a skipped backup."""
         logging.info("Backup skipped as local version is current.")
         return {'jira_action': 'NO_UPDATE_NEEDED'}
@@ -629,7 +630,7 @@ class JiraClient:
         logging.warning("Jira backup action '%s' resulted in no backup.", action)
         return {}
 
-    def process_backup(self, status, now):
+    def process_backup(self, now):
         """Handle Jira backup process by dispatching to helper methods."""
         logging.info('Starting Jira backup process...')
 
