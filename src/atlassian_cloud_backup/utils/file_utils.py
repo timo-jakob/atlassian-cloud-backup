@@ -221,11 +221,25 @@ class FileManager:
         # Load existing consolidated status
         consolidated = self.load_consolidated_status()
         
-        # Update this site's status
-        consolidated[self.url] = site_status
-        
-        # Save back to consolidated file
-        self.save_consolidated_status(consolidated)
+        # Filter out any Confluence-related keys, as we no longer store Confluence status in the file
+        if 'confluence_action' in site_status:
+            # Create a copy to avoid modifying the original
+            site_status_filtered = site_status.copy()
+            # Remove all Confluence-related keys
+            keys_to_remove = [k for k in site_status_filtered.keys() if k.startswith('confluence_')]
+            for key in keys_to_remove:
+                site_status_filtered.pop(key, None)
+            
+            # Only update if there's remaining data (e.g., Jira status)
+            if site_status_filtered:
+                consolidated[self.url] = site_status_filtered
+                # Save back to consolidated file
+                self.save_consolidated_status(consolidated)
+        else:
+            # Update this site's status with the original data (no Confluence info)
+            consolidated[self.url] = site_status
+            # Save back to consolidated file
+            self.save_consolidated_status(consolidated)
     
     def get_audit_log_path(self):
         """Get the path to the audit log file in the target backup directory.
@@ -242,3 +256,93 @@ class FileManager:
         
         os.makedirs(audit_dir, exist_ok=True)
         return os.path.join(audit_dir, 'atlassian.backup.audit.log')
+    
+    def find_latest_confluence_backup_file(self):
+        """Find the latest Confluence backup file based on filename pattern.
+        
+        Returns:
+            str or None: Path to latest Confluence backup file, or None if none exists
+        """
+        instance_folder = self.get_backup_folder()
+        
+        if not os.path.exists(instance_folder):
+            return None
+        
+        latest_file = None
+        latest_date = None
+        confluence_pattern = re.compile(r'^confluence-backup-(\d{4}-\d{2}-\d{2})\.zip$')
+        
+        try:
+            for filename in os.listdir(instance_folder):
+                match = confluence_pattern.match(filename)
+                if match:
+                    date_str = match.group(1)
+                    try:
+                        file_date = datetime.strptime(date_str, '%Y-%m-%d')
+                        if latest_date is None or file_date > latest_date:
+                            latest_date = file_date
+                            latest_file = os.path.join(instance_folder, filename)
+                    except ValueError:
+                        logging.warning('Invalid date format in filename: %s', filename)
+                        continue
+        except OSError as e:
+            logging.warning('Error reading backup directory %s: %s', instance_folder, e)
+            return None
+        
+        return latest_file
+
+    def extract_date_from_confluence_filename(self, filepath):
+        """Extract the backup date from a Confluence backup filename.
+        
+        Args:
+            filepath (str): Path to the Confluence backup file
+            
+        Returns:
+            datetime or None: Date from the filename, or None if parsing fails
+        """
+        if not filepath:
+            return None
+            
+        basename = os.path.basename(filepath)
+        match = re.match(r'^confluence-backup-(\d{4}-\d{2}-\d{2})\.zip$', basename)
+        
+        if not match:
+            return None
+            
+        try:
+            date_str = match.group(1)
+            return datetime.strptime(date_str, '%Y-%m-%d').replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            return None
+    
+    def is_confluence_backup_needed(self, now=None):
+        """Check if a new Confluence backup is needed based on the date of the latest backup file.
+        
+        Args:
+            now (datetime, optional): Current datetime. If None, current datetime is used.
+            
+        Returns:
+            tuple: (bool, str or None) - (True if backup needed, latest backup file path or None)
+        """
+        if now is None:
+            now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            # Normalize to start of day
+            now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+        latest_backup_file = self.find_latest_confluence_backup_file()
+        
+        if not latest_backup_file:
+            # No backup file exists
+            return True, None
+            
+        backup_date = self.extract_date_from_confluence_filename(latest_backup_file)
+        
+        if not backup_date:
+            # Couldn't parse date from filename
+            return True, latest_backup_file
+            
+        # Check if the backup date is at least 1 day older than the current date
+        backup_needed = (now - backup_date).days >= 1
+        
+        return backup_needed, latest_backup_file
