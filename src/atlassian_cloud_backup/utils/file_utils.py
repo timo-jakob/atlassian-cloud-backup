@@ -58,6 +58,52 @@ class FileManager:
         )
         return filename
     
+    def prepare_jira_backup_path(self, task_id, extension='.zip', backup_datetime=None):
+        """Create folder and return the full Jira backup file path with task ID prefix.
+        
+        Args:
+            task_id (int): Jira task ID to include in filename
+            extension (str): File extension for the backup file.
+            backup_datetime (datetime, optional): Specific datetime to use for the filename.
+                                                 If None, current datetime is used.
+        """
+        instance_folder = self.get_backup_folder() # This is an absolute path
+        
+        date_str = (backup_datetime or datetime.now()).strftime('%Y-%m-%d')
+        
+        filename = os.path.join(
+            instance_folder, 
+            f"{task_id}-jira-backup-{date_str}{extension}"
+        )
+        return filename
+    
+    def get_latest_jira_task_id_from_files(self):
+        """Extract the latest task ID from existing Jira backup files.
+        
+        Returns:
+            int or None: Latest task ID found in filenames, or None if no files exist
+        """
+        instance_folder = self.get_backup_folder()
+        
+        if not os.path.exists(instance_folder):
+            return None
+        
+        max_task_id = None
+        jira_pattern = re.compile(r'^(\d+)-jira-backup-.*\.zip$')
+        
+        try:
+            for filename in os.listdir(instance_folder):
+                match = jira_pattern.match(filename)
+                if match:
+                    task_id = int(match.group(1))
+                    if max_task_id is None or task_id > max_task_id:
+                        max_task_id = task_id
+        except (OSError, ValueError) as e:
+            logging.warning('Error reading backup directory %s: %s', instance_folder, e)
+            return None
+        
+        return max_task_id
+    
     def get_consolidated_status_file(self):
         """Get the path to the consolidated status file in the root backup directory."""
         if self.backup_target_directory:
@@ -155,7 +201,6 @@ class FileManager:
             site_data = {}
             if 'last_jira_backup' in site_status:
                 site_data['last_jira_backup'] = site_status['last_jira_backup'].isoformat()
-                site_data['jira_task_id'] = site_status.get('jira_task_id')
                 site_data['jira_file'] = site_status.get('jira_file')
             if 'last_confluence_backup' in site_status:
                 site_data['last_confluence_backup'] = site_status['last_confluence_backup'].isoformat()
@@ -181,3 +226,19 @@ class FileManager:
         
         # Save back to consolidated file
         self.save_consolidated_status(consolidated)
+    
+    def get_audit_log_path(self):
+        """Get the path to the audit log file in the target backup directory.
+        
+        Returns:
+            str: Full path to the audit log file
+        """
+        if self.backup_target_directory:
+            # Use the specified backup target directory
+            audit_dir = os.path.abspath(self.backup_target_directory)
+        else:
+            # If no backup target directory, use current working directory
+            audit_dir = os.getcwd()
+        
+        os.makedirs(audit_dir, exist_ok=True)
+        return os.path.join(audit_dir, 'atlassian.backup.audit.log')
