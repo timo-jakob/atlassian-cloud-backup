@@ -159,7 +159,9 @@ class BackupController:
         elif confluence_action == 'WAITED_FOR_EXISTING':
             self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), 'Waited for existing backup in progress')
         elif confluence_action == 'SKIPPED_FREQUENCY_LIMIT':
-            self._log_confluence_audit('SKIPPED', None, None, 'Backup denied due to frequency limits')
+            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), 'Backup skipped due to frequency limits')
+        elif confluence_action == 'SKIPPED_NO_UPDATE_NEEDED':
+            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), 'Backup skipped because newest version is less than one day old')
         elif confluence_action == 'SKIPPED_UNAVAILABLE':
             self._log_confluence_audit('SKIPPED', None, None, 'Service unavailable or unlicensed')
         elif confluence_action == 'FAILED':

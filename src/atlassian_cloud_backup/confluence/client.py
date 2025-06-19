@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from requests.exceptions import HTTPError
 
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
+from atlassian_cloud_backup.utils.file_utils import FileManager
 
 # Default timeout of 6 hours (360 minutes), can be overridden with environment variable
 DEFAULT_TIMEOUT_MINUTES = int(os.getenv('CONFLUENCE_BACKUP_TIMEOUT_MINUTES', 480))
@@ -52,20 +53,35 @@ class ConfluenceClient:
         """Handle Confluence backup process and return updated status.
         
         Args:
-            status (dict): Current backup status
+            status (dict): Current backup status (ignored, kept for API compatibility)
             now (datetime): Current datetime
             
         Returns:
             dict: Updated backup status with 'confluence_action' key indicating the action taken
         """
-        logging.info('Starting Confluence backup process - always attempting to trigger new backup')
+        logging.info('Starting Confluence backup process')
         
         # Check if Confluence is available first
         if not self._is_confluence_available():
             return {'confluence_action': 'SKIPPED_UNAVAILABLE'}
         
-        # Always try to trigger a new backup first
+        # Create a file manager to handle backup files
+        file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
+        
+        # Check if a new backup is needed based on file dates
+        backup_needed, latest_backup_file = file_manager.is_confluence_backup_needed(now)
+        
+        if not backup_needed:
+            backup_date = file_manager.extract_date_from_confluence_filename(latest_backup_file)
+            logging.info(
+                'Skipping Confluence backup - latest backup is from %s, less than one day ago', 
+                backup_date.strftime('%Y-%m-%d')
+            )
+            return {'confluence_action': 'SKIPPED_NO_UPDATE_NEEDED', 'confluence_file': latest_backup_file}
+        
+        # Try to trigger a new backup
         try:
+            logging.info('Triggering new Confluence backup')
             return self._attempt_backup_trigger(now)
         except HTTPError as e:
             return self._handle_http_error(e)
@@ -113,7 +129,20 @@ class ConfluenceClient:
         
         print(f"\n⚠️  Confluence Backup Limitation: {error_message}")
         logging.info('Confluence backup denied (HTTP 412): %s', error_message)
-        return {'confluence_action': 'SKIPPED_FREQUENCY_LIMIT'}
+        
+        # Check if we have an existing backup file that is recent enough
+        file_manager = FileManager(self.url, backup_target_directory=self.backup_target_directory)
+        _, latest_backup_file = file_manager.is_confluence_backup_needed()
+        
+        if latest_backup_file:
+            # We have an existing backup file, return it with SKIPPED action
+            return {
+                'confluence_action': 'SKIPPED_FREQUENCY_LIMIT',
+                'confluence_file': latest_backup_file
+            }
+        else:
+            # No existing backup file found
+            return {'confluence_action': 'SKIPPED_FREQUENCY_LIMIT'}
     
     def get_backup_status(self):
         """Check if a Confluence backup exists and get its status.
