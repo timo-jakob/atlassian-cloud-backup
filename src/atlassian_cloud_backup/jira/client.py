@@ -56,58 +56,34 @@ class JiraClient:
         """
         logging.info('Starting Jira backup process - always attempting to trigger new backup first')
         
-        # Step 1: Always try to trigger a new backup first
         try:
             result = self.trigger_backup()
             
+            # Handle dictionary result with action
             if isinstance(result, dict) and 'action' in result:
                 action = result['action']
                 
-                if action == 'new_backup':
-                    # Normal case - got a task ID, proceed with download
-                    task_id = result['task_id']
-                    logging.info(NEW_JIRA_TRIGGERED, task_id)
-                    new_backup = self._wait_and_download_backup(task_id, now)
-                    if new_backup:
-                        new_backup['jira_action'] = 'CREATED_NEW'
-                        return new_backup
-                    else:
-                        logging.error('Failed to complete new backup process')
-                        return {}
+                # Use a dispatch table to handle different actions
+                action_handlers = {
+                    'new_backup': lambda: self._handle_new_backup(result['task_id'], now),
+                    'downloaded': lambda: self._handle_downloaded_backup(result['backup_data']),
+                    'skipped': lambda: self._handle_skipped_backup(),
+                    'no_server_backup': lambda: self._handle_no_server_backup(),
+                    'download_failed': lambda: self._handle_download_failed()
+                }
                 
-                elif action == 'downloaded':
-                    # Downloaded existing backup from server
-                    backup_data = result['backup_data']
-                    backup_data['jira_action'] = 'REUSED_EXISTING'
-                    return backup_data
-                
-                elif action == 'skipped':
-                    # Local backup is current, skipped due to frequency limit
-                    logging.info("Backup skipped as local version is current.")
-                    return {'jira_action': 'NO_UPDATE_NEEDED'}
-                
-                elif action == 'no_server_backup':
-                    # No server backup available despite 412 error
-                    logging.warning("Jira backup action '%s' resulted in no backup because of frequency limit.", action)
-                    return {}
-                
-                elif action == 'download_failed':
-                    # Failed to download existing backup
-                    logging.warning("Jira backup action '%s' resulted in no backup because it failed.", action)
-                    return {}
-                    
-            elif isinstance(result, int):
-                # Legacy case - got a task ID directly
-                task_id = result
-                logging.info(NEW_JIRA_TRIGGERED, task_id)
-                new_backup = self._wait_and_download_backup(task_id, now)
-                if new_backup:
-                    new_backup['jira_action'] = 'CREATED_NEW'
-                    return new_backup
+                # Execute the appropriate handler if action is recognized
+                if action in action_handlers:
+                    return action_handlers[action]()
                 else:
-                    logging.error('Failed to complete new backup process')
+                    logging.error('Unknown action from trigger_backup: %s', action)
                     return {}
             
+            # Handle legacy integer result (task ID)
+            elif isinstance(result, int):
+                return self._handle_new_backup(result, now)
+            
+            # Handle unexpected result
             else:
                 logging.error('Unexpected result from trigger_backup: %s', result)
                 return {}
@@ -594,76 +570,63 @@ class JiraClient:
         logging.info('Jira backup triggered, task ID: %s', task_id)
         return int(task_id)
 
-    def _handle_new_backup(self, result, now):
-        """Handle the creation of a new backup."""
-        task_id = result.get('task_id')
-        if not task_id:
-            logging.error("New backup action triggered, but no task_id found in result.")
-            return {}
-
+    def _handle_new_backup(self, task_id, now):
+        """Handle new backup process.
+        
+        Args:
+            task_id: The task ID to process
+            now: Current datetime
+            
+        Returns:
+            dict: Backup information or empty dict if failed
+        """
         logging.info(NEW_JIRA_TRIGGERED, task_id)
         new_backup = self._wait_and_download_backup(task_id, now)
         if new_backup:
             new_backup['jira_action'] = 'CREATED_NEW'
             return new_backup
         else:
-            logging.error('Failed to complete new backup process for task ID %d', task_id)
+            logging.error('Failed to complete new backup process')
             return {}
-
-    def _handle_downloaded_existing(self, result):
-        """Handle the download of an existing backup."""
-        backup_data = result.get('backup_data')
-        if not backup_data:
-            logging.error("Downloaded action, but no backup_data found.")
-            return {}
+            
+    def _handle_downloaded_backup(self, backup_data):
+        """Handle downloaded backup data.
+        
+        Args:
+            backup_data: The downloaded backup data
+            
+        Returns:
+            dict: Backup information
+        """
         backup_data['jira_action'] = 'REUSED_EXISTING'
         return backup_data
-
-    def _handle_skipped(self):
-        """Handle a skipped backup."""
+        
+    def _handle_skipped_backup(self):
+        """Handle skipped backup scenario.
+        
+        Returns:
+            dict: Action information
+        """
         logging.info("Backup skipped as local version is current.")
         return {'jira_action': 'NO_UPDATE_NEEDED'}
-
-    def _handle_failure(self, result):
-        """Handle a failed backup attempt."""
-        action = result.get('action', 'unknown failure')
-        logging.warning("Jira backup action '%s' resulted in no backup.", action)
+        
+    def _handle_no_server_backup(self):
+        """Handle no server backup available scenario.
+        
+        Returns:
+            dict: Empty dict
+        """
+        logging.warning("No server backup available despite frequency limit.")
         return {}
-
-    def process_backup(self, now):
-        """Handle Jira backup process by dispatching to helper methods."""
-        logging.info('Starting Jira backup process...')
-
-        try:
-            result = self.trigger_backup()
-        except Exception as e:
-            logging.error('Jira backup trigger failed: %s', str(e))
-            return {}
-
-        # Handle legacy integer result for backward compatibility
-        if isinstance(result, int):
-            logging.warning("Received legacy integer task ID from trigger_backup.")
-            return self._handle_new_backup({'task_id': result}, now)
-
-        if not isinstance(result, dict) or 'action' not in result:
-            logging.warning('trigger_backup returned an unexpected result: %s', result)
-            return {}
-
-        action = result.get('action')
-
-        # Dispatch table for different backup actions
-        action_handlers = {
-            'new_backup': lambda: self._handle_new_backup(result, now),
-            'downloaded': lambda: self._handle_downloaded_existing(result),
-            'skipped': lambda: self._handle_skipped(result),
-            'no_server_backup': lambda: self._handle_failure(result),
-            'download_failed': lambda: self._handle_failure(result),
-        }
-
-        handler = action_handlers.get(action)
-
-        if handler:
-            return handler()
-        else:
-            logging.warning("Unknown action received from trigger_backup: '%s'", action)
-            return {}
+        
+    def _handle_download_failed(self):
+        """Handle download failure scenario.
+        
+        Returns:
+            dict: Empty dict
+        """
+        logging.warning("Backup download failed.")
+        return {}
+    
+    # The process_backup method has been moved to the top of the class
+    # and refactored to reduce cognitive complexity
