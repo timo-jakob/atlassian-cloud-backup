@@ -137,7 +137,7 @@ class BackupController:
         elif jira_action == 'REUSED_EXISTING':
             self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), 'Downloaded existing server backup (frequency limit)')
         elif jira_action == 'NO_UPDATE_NEEDED':
-            self._log_jira_audit('SKIPPED', None, None, 'Backup skipped because newest version already backed up and new backup not allowed due to backup frequency limitation')
+            self._log_jira_audit('SKIPPED', None, None, self.JIRA_SKIP_REASON_FREQUENCY_LIMIT)
         elif jira_action == 'FAILED':
             self._log_jira_audit('FAILED', None, None, 'Backup process failed')
     
