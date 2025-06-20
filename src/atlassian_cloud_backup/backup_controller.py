@@ -12,6 +12,8 @@ from atlassian_cloud_backup.utils.audit_utils import AuditLogger
 class BackupController:
     """Controller for orchestrating backups of Atlassian Cloud instances."""
     
+# (Removed the unused constant JIRA_SKIP_REASON_FREQUENCY_LIMIT)
+    
     def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, jira_backup_timeout_minutes=None):
         """
         Initialize backup controller with credentials.
@@ -58,6 +60,7 @@ class BackupController:
         Returns:
             bool: True if at least one backup was performed
         """
+        # Use UTC time for consistent datetime handling across systems
         now = datetime.now(timezone.utc)
         updated = {}
 
@@ -71,10 +74,8 @@ class BackupController:
         confluence_updates = self._process_confluence_backup({}, now)
         updated.update(confluence_updates)
 
-        # Save updates if any changes were made
+        # Check if any updates were made
         if updated:
-            # Update consolidated status file
-            self.file_manager.update_site_in_consolidated_status(updated)
             return True
         
         return False
