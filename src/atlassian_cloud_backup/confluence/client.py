@@ -41,18 +41,6 @@ class ConfluenceClient:
         """Handle Confluence backup process and return updated status.
         
         Args:
-            status (dict): Current backup status
-            now (datetime): Current datetime
-            
-        Returns:
-            dict: Updated backup status with 'confluence_action' key indicating the action taken
-        """
-        logging.info('Starting Confluence backup process - always attempting to trigger new backup')
-        
-    def process_backup(self, status, now):
-        """Handle Confluence backup process and return updated status.
-        
-        Args:
             status (dict): Current backup status (ignored, kept for API compatibility)
             now (datetime): Current datetime
             
@@ -290,9 +278,9 @@ class ConfluenceClient:
         if status not in ('COMPLETE', 'FAILED', 'ERROR'):
             # Always show progress when available, regardless of return_data mode
             if progress and str(progress) != '0':
-                logging.info('Confluence backup progress: %s%%, status: %s', progress, status)
+                logging.info('Confluence serverside backup progress: %s%%, status: %s', progress, status)
             else:
-                logging.info('Confluence backup status: %s', status)
+                logging.info('Confluence serverside backup status: %s', status)
     
     def _evaluate_backup_status(self, status, progress, data, return_data):
         """Evaluate backup status and determine if monitoring should continue.

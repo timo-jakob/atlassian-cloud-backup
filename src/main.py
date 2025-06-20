@@ -78,7 +78,7 @@ def get_runtime_configuration():
         'api_token': get_config_value('ATLASSIAN_API_TOKEN', 'api_token'),
         'poll_interval': int(get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')),
         'backup_target_directory': get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory'),
-        'jira_backup_timeout_minutes': int(get_config_value('JIRA_BACKUP_TIMEOUT_MINUTES', 'jira_backup_timeout_minutes', '480'))
+        'jira_backup_timeout_minutes': int(get_config_value('JIRA_BACKUP_TIMEOUT_MINUTES', 'jira_backup_timeout_minutes', '600'))
     }
 
 @click.command()
@@ -98,7 +98,7 @@ def main():
     - POLL_INTERVAL_SECONDS / poll_interval_seconds: Optional, seconds to wait between API polling requests (default: 30)
     - BACKUP_TARGET_DIRECTORY / backup_target_directory: Optional, the base directory where backup files will be stored.
       If not provided, backups will be stored in subdirectories named after the instance URL in the current working directory.
-    - JIRA_BACKUP_TIMEOUT_MINUTES / jira_backup_timeout_minutes: Optional, timeout in minutes for Jira backup (default: 480)
+    - JIRA_BACKUP_TIMEOUT_MINUTES / jira_backup_timeout_minutes: Optional, timeout in minutes for Jira backup (default: 600 minutes).
     """
     # Initialize properties file
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
@@ -136,11 +136,9 @@ def main():
     
     logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
     
-    # Log information about the consolidated status file and audit log
+    # Log information about the audit log
     temp_fm = FileManager(urls[0], backup_target_directory=backup_target_directory)
-    consolidated_status_file = temp_fm.get_consolidated_status_file()
     audit_log_file = temp_fm.get_audit_log_path()
-    logging.info('Backup status will be saved to: %s', consolidated_status_file)
     logging.info('Audit logs will be written to: %s', audit_log_file)
     
     success_count = 0
