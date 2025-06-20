@@ -11,7 +11,12 @@ from datetime import datetime
 import configparser  # Added import
 from pathlib import Path  # Added import
 
-from atlassian_cloud_backup import BackupController
+import sys
+import os
+
+# Add the current directory to the path so imports work correctly
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from atlassian_cloud_backup.backup_controller import BackupController
 from atlassian_cloud_backup.utils.file_utils import FileManager
 
 # Configure logging to stdout
