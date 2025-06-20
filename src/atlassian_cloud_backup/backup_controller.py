@@ -13,7 +13,10 @@ class BackupController:
     """Controller for orchestrating backups of Atlassian Cloud instances."""
     
     # Constants for audit log messages
-    JIRA_SKIP_REASON_FREQUENCY_LIMIT = 'Backup skipped because newest version already backed up and new backup not allowed due to backup frequency limitation'
+    JIRA_SKIP_REASON_FREQUENCY_LIMIT = (
+        'Backup skipped because the newest version is already backed up, '
+        'and a new backup is not allowed due to the backup frequency limitation.'
+    )
     
     def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, jira_backup_timeout_minutes=None):
         """
