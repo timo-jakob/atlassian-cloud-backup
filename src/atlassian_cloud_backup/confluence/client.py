@@ -278,7 +278,7 @@ class ConfluenceClient:
         if status not in ('COMPLETE', 'FAILED', 'ERROR'):
             # Always show progress when available, regardless of return_data mode
             if progress and str(progress) != '0':
-                logging.info('Confluence serverside backup progress: %s%%, status: %s', progress, status)
+                logging.info('Confluence server-side backup progress: %s%%, status: %s', progress, status)
             else:
                 logging.info('Confluence serverside backup status: %s', status)
     
