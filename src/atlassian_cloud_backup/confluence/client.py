@@ -10,13 +10,13 @@ from requests.exceptions import HTTPError
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file
 from atlassian_cloud_backup.utils.file_utils import FileManager
 
-# Default timeout of 6 hours (360 minutes), can be overridden with environment variable
-DEFAULT_TIMEOUT_MINUTES = int(os.getenv('CONFLUENCE_BACKUP_TIMEOUT_MINUTES', 480))
+# Fixed timeout of 600 minutes (10 hours) for Confluence backups
+DEFAULT_TIMEOUT_MINUTES = 600
 
 class ConfluenceClient:
     """Client for handling Confluence backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30, include_attachments=True, backup_target_directory=None):
+    def __init__(self, url, username, api_token, poll_interval=30, include_attachments=True, backup_target_directory=None, backup_timeout_minutes=DEFAULT_TIMEOUT_MINUTES):
         """
         Initialize Confluence client.
         
@@ -26,6 +26,8 @@ class ConfluenceClient:
             api_token (str): API token for authentication
             poll_interval (int): Seconds to wait between polling requests
             include_attachments (bool): Whether to include attachments in backups
+            backup_target_directory (str, optional): Base directory for backups
+            backup_timeout_minutes (int, optional): Timeout in minutes for Confluence backup
         """
         self.url = url
         self.username = username
@@ -33,6 +35,7 @@ class ConfluenceClient:
         self.poll_interval = poll_interval
         self.include_attachments = include_attachments
         self.backup_target_directory = backup_target_directory
+        self.backup_timeout_minutes = backup_timeout_minutes
         
         # Log the URL being used
         logging.info('Connecting to Confluence instance at %s', self.url)
@@ -198,7 +201,7 @@ class ConfluenceClient:
         Returns:
             bool or dict: Success status (bool) or backup data (dict) if return_data=True
         """
-        timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES
+        timeout_minutes = timeout_minutes or self.backup_timeout_minutes
         logging.info('Monitoring Confluence backup progress (timeout: %d minutes)...', timeout_minutes)
         
         monitor_context = self._initialize_confluence_monitoring(timeout_minutes)

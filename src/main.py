@@ -49,7 +49,7 @@ def validate_credentials(username, api_token):
         return False
     return True
 
-def process_single_backup(url, username, api_token, poll_interval, backup_target_directory, jira_backup_timeout_minutes):
+def process_single_backup(url, username, api_token, poll_interval, backup_target_directory):
     """Process backup for a single Atlassian instance.
     
     Returns:
@@ -62,8 +62,7 @@ def process_single_backup(url, username, api_token, poll_interval, backup_target
             username=username,
             api_token=api_token,
             poll_interval=poll_interval,
-            backup_target_directory=backup_target_directory,
-            jira_backup_timeout_minutes=jira_backup_timeout_minutes
+            backup_target_directory=backup_target_directory
         )
         controller.orchestrate()
         logging.info('Completed backup for %s', url)
@@ -82,8 +81,7 @@ def get_runtime_configuration():
         'username': get_config_value('ATLASSIAN_USERNAME', 'username'),
         'api_token': get_config_value('ATLASSIAN_API_TOKEN', 'api_token'),
         'poll_interval': int(get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')),
-        'backup_target_directory': get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory'),
-        'jira_backup_timeout_minutes': int(get_config_value('JIRA_BACKUP_TIMEOUT_MINUTES', 'jira_backup_timeout_minutes', '600'))
+        'backup_target_directory': get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory')
     }
 
 @click.command()
@@ -103,7 +101,6 @@ def main():
     - POLL_INTERVAL_SECONDS / poll_interval_seconds: Optional, seconds to wait between API polling requests (default: 30)
     - BACKUP_TARGET_DIRECTORY / backup_target_directory: Optional, the base directory where backup files will be stored.
       If not provided, backups will be stored in subdirectories named after the instance URL in the current working directory.
-    - JIRA_BACKUP_TIMEOUT_MINUTES / jira_backup_timeout_minutes: Optional, timeout in minutes for Jira backup (default: 600 minutes).
     """
     # Initialize properties file
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
@@ -133,7 +130,6 @@ def main():
     api_token = runtime_config['api_token']
     poll_interval = runtime_config['poll_interval']
     backup_target_directory = runtime_config['backup_target_directory']
-    jira_backup_timeout_minutes = runtime_config['jira_backup_timeout_minutes']
 
     # Validate credentials
     if not validate_credentials(username, api_token):
@@ -149,7 +145,7 @@ def main():
     success_count = 0
     for url in urls:
         # Process backup for each URL
-        if process_single_backup(url, username, api_token, poll_interval, backup_target_directory, jira_backup_timeout_minutes):
+        if process_single_backup(url, username, api_token, poll_interval, backup_target_directory):
             success_count += 1
             
     logging.info('Backup completed for %d of %d Atlassian instances', success_count, len(urls))

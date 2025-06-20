@@ -30,7 +30,7 @@ class TestJiraClient:
                 api_token="test-token",
                 poll_interval=1,  # Short interval for faster tests
                 backup_target_directory="/tmp/backups",
-                jira_backup_timeout_minutes=10
+                backup_timeout_minutes=10
             )
 
     @patch('atlassian_cloud_backup.jira.client.make_authenticated_request')

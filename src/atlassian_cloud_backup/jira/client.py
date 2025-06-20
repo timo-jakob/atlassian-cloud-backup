@@ -12,8 +12,8 @@ from atlassian import Jira
 from atlassian_cloud_backup.utils.http_utils import make_authenticated_request, download_file, DownloadError
 from atlassian_cloud_backup.utils.file_utils import FileManager # Ensure FileManager is imported
 
-# Default timeout of 6 hours (360 minutes), can be overridden with environment variable
-DEFAULT_TIMEOUT_MINUTES = int(os.getenv('JIRA_BACKUP_TIMEOUT_MINUTES', 480))
+# Fixed timeout of 600 minutes (10 hours) for Jira backups
+DEFAULT_TIMEOUT_MINUTES = 600
 DATEIME_FORMAT_STR = '%Y-%m-%d %H:%M:%S %Z'
 APPLICATION_JSON = 'application/json'
 NEW_JIRA_TRIGGERED = 'New Jira backup triggered successfully with task ID: %d'
@@ -21,7 +21,7 @@ NEW_JIRA_TRIGGERED = 'New Jira backup triggered successfully with task ID: %d'
 class JiraClient:
     """Client for handling Jira backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, jira_backup_timeout_minutes=None):
+    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, backup_timeout_minutes=DEFAULT_TIMEOUT_MINUTES):
         """
         Initialize Jira client.
         
@@ -31,14 +31,14 @@ class JiraClient:
             api_token (str): API token for authentication
             poll_interval (int): Seconds to wait between polling requests
             backup_target_directory (str, optional): Base directory for backups.
-            jira_backup_timeout_minutes (int, optional): Timeout in minutes for Jira backup.
+            backup_timeout_minutes (int, optional): Timeout in minutes for Jira backup.
         """
         self.url = url
         self.username = username
         self.api_token = api_token
         self.poll_interval = poll_interval
         self.backup_target_directory = backup_target_directory # Store the directory
-        self.jira_backup_timeout_minutes = jira_backup_timeout_minutes # Store the timeout
+        self.backup_timeout_minutes = backup_timeout_minutes # Store the timeout
         
         # Log the URL being used
         logging.info('Connecting to Jira instance at %s', self.url)
@@ -297,9 +297,7 @@ class JiraClient:
         """Determine the appropriate timeout value."""
         if timeout_minutes is not None:
             return timeout_minutes
-        if self.jira_backup_timeout_minutes is not None:
-            return self.jira_backup_timeout_minutes
-        return DEFAULT_TIMEOUT_MINUTES
+        return self.backup_timeout_minutes
 
     def _initialize_monitoring_context(self, timeout_minutes):
         """Initialize context for backup monitoring."""
