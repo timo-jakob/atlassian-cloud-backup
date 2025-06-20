@@ -12,8 +12,7 @@ from atlassian_cloud_backup.utils.audit_utils import AuditLogger
 class BackupController:
     """Controller for orchestrating backups of Atlassian Cloud instances."""
     
-    # Constants for audit log messages
-    JIRA_SKIP_REASON_FREQUENCY_LIMIT = 'Backup skipped because newest version already backed up and new backup not allowed due to backup frequency limitation'
+# (Removed the unused constant JIRA_SKIP_REASON_FREQUENCY_LIMIT)
     
     def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, jira_backup_timeout_minutes=None):
         """
