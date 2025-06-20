@@ -18,7 +18,7 @@ class BackupController:
         'and a new backup is not allowed due to the backup frequency limitation.'
     )
     
-    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, jira_backup_timeout_minutes=None):
+    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None):
         """
         Initialize backup controller with credentials.
         
@@ -28,7 +28,6 @@ class BackupController:
             api_token (str): API token for authentication
             poll_interval (int): Seconds to wait between polling requests
             backup_target_directory (str, optional): Base directory for backups.
-            jira_backup_timeout_minutes (int, optional): Timeout in minutes for Jira backup.
         """
         # Store provided credentials and parameters
         self.url = url
@@ -36,24 +35,21 @@ class BackupController:
         self.api_token = api_token
         self.poll_interval = poll_interval
         self.backup_target_directory = backup_target_directory
-        self.jira_backup_timeout_minutes = jira_backup_timeout_minutes
         
         # Log the URL being used
         logging.info('Using Atlassian Cloud URL: %s', self.url)
         
+        # Standard timeout for all backups: 600 minutes (10 hours)
+        backup_timeout_minutes = 600
+        logging.info('Backup timeout for both Jira and Confluence: %d minutes', backup_timeout_minutes)
+        
         # Initialize components
-        self.jira_client = JiraClient(url, username, api_token, poll_interval, self.backup_target_directory, self.jira_backup_timeout_minutes)
-        self.confluence_client = ConfluenceClient(url, username, api_token, poll_interval, True, self.backup_target_directory)
+        self.jira_client = JiraClient(url, username, api_token, poll_interval, self.backup_target_directory, backup_timeout_minutes)
+        self.confluence_client = ConfluenceClient(url, username, api_token, poll_interval, True, self.backup_target_directory, backup_timeout_minutes)
         self.file_manager = FileManager(url, backup_target_directory=self.backup_target_directory)
 
         # Log the target directory for backups
         logging.info('Backup target directory: %s', self.file_manager.get_backup_folder())
-        # Log the Jira backup timeout
-        if self.jira_backup_timeout_minutes is not None:
-            logging.info('Jira backup timeout: %d minutes', self.jira_backup_timeout_minutes)
-        else:
-            default_timeout = 480  # Default timeout value in minutes
-            logging.info('Jira backup timeout: Using default value of %d minutes', default_timeout)
         
     def orchestrate(self):
         """
