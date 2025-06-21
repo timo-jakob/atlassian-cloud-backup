@@ -1,9 +1,10 @@
-name: Run Pytest
+name: Run Pytest with SonarCloud Analysis
 
 permissions:
   contents: read
   pull-requests: write  # Needed for SonarCloud to comment on PRs
   checks: write         # Needed for SonarCloud to create checks
+  security-events: write # Needed for SonarCloud security reporting
 
 on:
   pull_request:
@@ -53,3 +54,9 @@ jobs:
         coverage run --source=src/atlassian_cloud_backup -m pytest tests/ --junit-xml=test-results.xml
         coverage xml -o coverage.xml
         coverage report --show-missing
+        
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@v2.1.1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
