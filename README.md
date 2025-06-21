@@ -13,3 +13,19 @@ The application implements a **fresh backup approach** that prioritizes new back
 - **Fresh Backup Strategy**: Always attempts to create new backups without relying on previous backup status discovery
 - **Status Tracking**: Maintains a consolidated status file to track successful backup operations across multiple sites
 - **Seamless Integration**: Works transparently with existing backup operations
+
+## 🔍 SonarCloud Integration
+
+This project uses SonarCloud for code quality and test coverage analysis. The GitHub Actions workflow automatically sends test coverage data to SonarCloud when tests are run.
+
+### For Contributors
+
+If you're forking this repository and want to use SonarCloud:
+
+1. Go to [SonarCloud](https://sonarcloud.io/) and sign up/login with your GitHub account
+2. Add your fork as a new project 
+3. Set up a new repository secret in your GitHub repository:
+   - Go to your repository → Settings → Secrets and variables → Actions
+   - Add a new repository secret with the name `SONAR_TOKEN` and the value of your SonarCloud token
+
+The GitHub Actions workflow will automatically run tests and send coverage data to SonarCloud on each push and pull request.
