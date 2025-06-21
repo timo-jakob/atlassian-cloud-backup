@@ -13,11 +13,20 @@ class BackupController:
     """Controller for orchestrating backups of Atlassian Cloud instances."""
     
     # Constants for audit log messages
-    JIRA_SKIP_REASON_FREQUENCY_LIMIT = (
+    BACKUP_NEW_REASON = 'A new backup was created and downloaded successfully.'
+    BACKUP_SKIP_REASON_FREQUENCY_LIMIT = (
         'Backup skipped because the newest version is already backed up, '
         'and a new backup is not allowed due to the backup frequency limitation.'
     )
-    
+    BACKUP_SKIP_REASON_FREQUENCY_LIMIT_1_DAY = 'Backup skipped because the newest version is already backed up just one day ago.'
+    BACKUP_FAILED_REASON = 'Backup process failed'
+    BACKUP_REUSED_LAST_SERVER_BACKUP = (
+        'Backup reusing already existing backup from the server, '
+        'which is newer than the last local backup.'
+    )
+    CONFLUENCE_BACKUP_SKIPPED_UNLICENSED_REASON = 'Confluence is unlicensed'
+    CONFLUENCE_BACKUP_SKIPPED_SERVICE_UNAVAILABLE_REASON = 'Confluence service is unavailable'
+
     def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None):
         """
         Initialize backup controller with credentials.
@@ -134,13 +143,13 @@ class BackupController:
         jira_file = jira_updates.get('jira_file')
         
         if jira_action == 'CREATED_NEW':
-            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), 'New backup created')
+            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), self.BACKUP_NEW_REASON)
         elif jira_action == 'REUSED_EXISTING':
-            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), 'Downloaded existing server backup (frequency limit)')
+            self._log_jira_audit('SUCCESS', jira_file, self._get_file_size(jira_file), self.BACKUP_REUSED_LAST_SERVER_BACKUP)
         elif jira_action == 'NO_UPDATE_NEEDED':
-            self._log_jira_audit('SKIPPED', None, None, self.JIRA_SKIP_REASON_FREQUENCY_LIMIT)
+            self._log_jira_audit('SKIPPED', None, None, self.BACKUP_SKIP_REASON_FREQUENCY_LIMIT)
         elif jira_action == 'FAILED':
-            self._log_jira_audit('FAILED', None, None, 'Backup process failed')
+            self._log_jira_audit('FAILED', None, None, self.BACKUP_FAILED_REASON)
     
     def _handle_confluence_audit_logging(self, confluence_updates):
         """
@@ -156,17 +165,17 @@ class BackupController:
         confluence_file = confluence_updates.get('confluence_file')
         
         if confluence_action == 'CREATED_NEW':
-            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), 'New backup created')
+            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), self.BACKUP_NEW_REASON)
         elif confluence_action == 'WAITED_FOR_EXISTING':
-            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), 'Waited for existing backup in progress')
+            self._log_confluence_audit('SUCCESS', confluence_file, self._get_file_size(confluence_file), self.BACKUP_REUSED_LAST_SERVER_BACKUP)
         elif confluence_action == 'SKIPPED_FREQUENCY_LIMIT':
-            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), 'Backup skipped due to frequency limits')
+            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), self.BACKUP_SKIP_REASON_FREQUENCY_LIMIT)
         elif confluence_action == 'SKIPPED_NO_UPDATE_NEEDED':
-            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), 'Backup skipped because newest version is less than one day old')
+            self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), self.BACKUP_SKIP_REASON_FREQUENCY_LIMIT_1_DAY)
         elif confluence_action == 'SKIPPED_UNAVAILABLE':
-            self._log_confluence_audit('SKIPPED', None, None, 'Service unavailable or unlicensed')
+            self._log_confluence_audit('SKIPPED', None, None, self.CONFLUENCE_UNLICENSED_REASON)
         elif confluence_action == 'FAILED':
-            self._log_confluence_audit('FAILED', None, None, 'Backup process failed')
+            self._log_confluence_audit('FAILED', None, None, self.BACKUP_FAILED_REASON)
 
     def _log_jira_audit(self, status, filename=None, filesize=None, reason=None):
         """Log audit entry for Jira backup operation."""
