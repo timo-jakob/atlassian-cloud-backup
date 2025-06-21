@@ -24,7 +24,8 @@ class BackupController:
         'Backup reusing already existing backup from the server, '
         'which is newer than the last local backup.'
     )
-    CONFLUENCE_UNLICENSED_REASON = 'Confluence is unlicensed'
+    CONFLUENCE_BACKUP_SKIPPED_UNLICENSED_REASON = 'Confluence is unlicensed'
+    CONFLUENCE_BACKUP_SKIPPED_SERVICE_UNAVAILABLE_REASON = 'Confluence service is unavailable'
 
     def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None):
         """
