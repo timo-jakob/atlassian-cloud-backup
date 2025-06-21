@@ -21,7 +21,7 @@ class BackupController:
     BACKUP_SKIP_REASON_FREQUENCY_LIMIT_1_DAY = 'Backup skipped because the newest version is already backed up just one day ago.'
     BACKUP_FAILED_REASON = 'Backup process failed'
     BACKUP_REUSED_LAST_SERVER_BACKUP = (
-        'Backup reusing already existing backup from the server,'
+        'Backup reusing already existing backup from the server, '
         'which is newer than the last local backup.'
     )
     CONFLUENCE_UNLICENSED_REASON = 'Confluence is unlicensed'
