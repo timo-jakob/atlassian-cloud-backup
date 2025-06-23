@@ -173,7 +173,7 @@ class BackupController:
         elif confluence_action == 'SKIPPED_NO_UPDATE_NEEDED':
             self._log_confluence_audit('SKIPPED', confluence_file, self._get_file_size(confluence_file), self.BACKUP_SKIP_REASON_FREQUENCY_LIMIT_1_DAY)
         elif confluence_action == 'SKIPPED_UNAVAILABLE':
-            self._log_confluence_audit('SKIPPED', None, None, self.CONFLUENCE_UNLICENSED_REASON)
+            self._log_confluence_audit('SKIPPED', None, None, self.CONFLUENCE_BACKUP_SKIPPED_UNLICENSED_REASON)
         elif confluence_action == 'FAILED':
             self._log_confluence_audit('FAILED', None, None, self.BACKUP_FAILED_REASON)
 
