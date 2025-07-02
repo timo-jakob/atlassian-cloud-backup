@@ -490,12 +490,13 @@ class JiraClient:
                     logging.error('ZIP file %s contains corrupted file: %s', filepath, bad_file)
                     return False
                 
-                # Check if ZIP has any files
-                if len(zip_file.namelist()) == 0:
+                # Check if ZIP has any files and store file list
+                file_list = zip_file.namelist()
+                if len(file_list) == 0:
                     logging.error('ZIP file %s is empty', filepath)
                     return False
                 
-                logging.info('ZIP file %s verified successfully (%d files)', filepath, len(zip_file.namelist()))
+                logging.info('ZIP file %s verified successfully (%d files)', filepath, len(file_list))
                 return True
                 
         except zipfile.BadZipFile:
