@@ -16,6 +16,8 @@ import termios
 import sys
 import os
 
+USER_INPUT_TIMEOUT_SECONDS = 3600  # 1 hour timeout for user input
+
 # Add the current directory to the path so imports work correctly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from atlassian_cloud_backup.backup_controller import BackupController
