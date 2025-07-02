@@ -44,8 +44,37 @@ def get_config_value(env_var, prop_key, default=None):
         return config['atlassian'][prop_key]
     return default
 
+def _read_input_with_timeout():
+    """Read input with timeout handling, for interactive terminals."""
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], USER_INPUT_TIMEOUT_SECONDS)  # 1 hour timeout
+        
+        if ready:
+            return sys.stdin.readline().strip()
+        else:
+            logging.error("Timeout waiting for user input. Exiting.")
+            try:
+                # This may fail in testing environments, so wrap it in try/except
+                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+            except (IOError, AttributeError):
+                pass  # Ignore if not supported (e.g., in testing or non-Unix systems)
+            sys.exit(1)
+    except (AttributeError, IOError, ValueError) as e:
+        logging.debug(f"Error using select: {e}. Falling back to direct readline.")
+        # If select fails, fall back to readline directly
+        return sys.stdin.readline().strip()
+
+def _read_input_direct():
+    """Read input directly, for non-interactive environments."""
+    try:
+        return sys.stdin.readline().strip()
+    except (AttributeError, IOError, ValueError) as e:
+        logging.debug(f"Error reading input: {e}. Treating as empty input.")
+        return ""
+
 def prompt_for_config(prompt, current_value=None, default=None):
     """Helper to prompt for a configuration value with a timeout."""
+    # Prepare prompt text
     if current_value:
         prompt_text = f"{prompt} [{current_value}]: "
     elif default:
@@ -53,18 +82,14 @@ def prompt_for_config(prompt, current_value=None, default=None):
     else:
         prompt_text = f"{prompt}: "
     
+    # Display prompt
     sys.stdout.write(prompt_text)
     sys.stdout.flush()
     
-    ready, _, _ = select.select([sys.stdin], [], [], USER_INPUT_TIMEOUT_SECONDS) # 1 hour timeout
+    # Read user input
+    value = _read_input_with_timeout() if sys.stdin.isatty() else _read_input_direct()
     
-    if ready:
-        value = sys.stdin.readline().strip()
-    else:
-        logging.error("Timeout waiting for user input. Exiting.")
-        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-        sys.exit(1)
-
+    # Handle empty input
     if not value:
         return current_value or default
     return value
