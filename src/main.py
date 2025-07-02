@@ -60,7 +60,7 @@ def prompt_for_config(prompt, current_value=None, default=None):
         value = sys.stdin.readline().strip()
     else:
         logging.error("Timeout waiting for user input. Exiting.")
-        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
         sys.exit(1)
 
     if not value:
