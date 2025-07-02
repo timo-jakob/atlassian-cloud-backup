@@ -49,11 +49,15 @@ jobs:
       run: |
         source venv/bin/activate
         # Set PYTHONPATH to ensure proper imports
-        export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
-        # Run tests with coverage and generate XML report for SonarCloud with relative paths
-        coverage run --source=src/atlassian_cloud_backup -m pytest tests/ --junit-xml=test-results.xml
-        coverage xml -o coverage.xml
-        coverage report --show-missing
+        export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+        # Clear any previous coverage data
+        python -m coverage erase
+        # Run all tests with coverage
+        python -m pytest tests/ --cov=src/atlassian_cloud_backup --cov-config=.coveragerc --junit-xml=test-results.xml
+        # Generate coverage reports for SonarCloud
+        python -m coverage xml
+        # Print coverage report
+        python -m coverage report --show-missing
         
     - name: SonarCloud Scan
       uses: SonarSource/sonarcloud-github-action@v2.1.1

@@ -1,0 +1,174 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:3adea12f-03d5-4adf-9394-05d89695a47d",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2025-07-02T00:00:00Z",
+    "tools": [
+      {
+        "name": "GitHub Copilot",
+        "vendor": "GitHub",
+        "version": "2025.7",
+        "hashes": []
+      }
+    ],
+    "authors": [
+      {
+        "name": "timo-jakob"
+      }
+    ],
+    "component": {
+      "bom-ref": "pkg:github/timo-jakob/atlassian-cloud-backup@0.1.0",
+      "type": "application",
+      "name": "atlassian-cloud-backup",
+      "version": "0.1.0",
+      "purl": "pkg:github/timo-jakob/atlassian-cloud-backup@0.1.0",
+      "description": "A rock-solid backup solution for Atlassian Cloud services (Jira and Confluence)",
+      "properties": [
+        {
+          "name": "github:repository",
+          "value": "https://github.com/timo-jakob/atlassian-cloud-backup"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "pkg:pypi/requests@2.32.4",
+      "type": "library",
+      "name": "requests",
+      "version": "2.32.4",
+      "purl": "pkg:pypi/requests@2.32.4",
+      "description": "Python HTTP for Humans",
+      "hashes": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/click@8.2.1",
+      "type": "library",
+      "name": "click",
+      "version": "8.2.1",
+      "purl": "pkg:pypi/click@8.2.1",
+      "description": "Composable command line interface toolkit",
+      "hashes": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/atlassian-python-api@4.0.4",
+      "type": "library",
+      "name": "atlassian-python-api",
+      "version": "4.0.4",
+      "purl": "pkg:pypi/atlassian-python-api@4.0.4",
+      "description": "Python Atlassian REST API Wrapper",
+      "hashes": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/pytest@8.4.1",
+      "type": "library",
+      "name": "pytest",
+      "version": "8.4.1",
+      "purl": "pkg:pypi/pytest@8.4.1",
+      "description": "pytest: simple powerful testing with Python",
+      "hashes": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/pytest-cov@6.2.1",
+      "type": "library",
+      "name": "pytest-cov",
+      "version": "6.2.1",
+      "purl": "pkg:pypi/pytest-cov@6.2.1",
+      "description": "Pytest plugin for measuring coverage",
+      "hashes": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/coverage@7.9.1",
+      "type": "library",
+      "name": "coverage",
+      "version": "7.9.1",
+      "purl": "pkg:pypi/coverage@7.9.1",
+      "description": "Code coverage measurement for Python",
+      "hashes": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:github/timo-jakob/atlassian-cloud-backup@0.1.0",
+      "dependsOn": [
+        "pkg:pypi/requests@2.32.4",
+        "pkg:pypi/click@8.2.1",
+        "pkg:pypi/atlassian-python-api@4.0.4",
+        "pkg:pypi/pytest@8.4.1",
+        "pkg:pypi/pytest-cov@6.2.1",
+        "pkg:pypi/coverage@7.9.1"
+      ]
+    },
+    {
+      "ref": "pkg:pypi/requests@2.32.4",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:pypi/click@8.2.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:pypi/atlassian-python-api@4.0.4",
+      "dependsOn": ["pkg:pypi/requests@2.32.4"]
+    },
+    {
+      "ref": "pkg:pypi/pytest@8.4.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:pypi/pytest-cov@6.2.1",
+      "dependsOn": [
+        "pkg:pypi/pytest@8.4.1",
+        "pkg:pypi/coverage@7.9.1"
+      ]
+    },
+    {
+      "ref": "pkg:pypi/coverage@7.9.1",
+      "dependsOn": []
+    }
+  ]
+}
