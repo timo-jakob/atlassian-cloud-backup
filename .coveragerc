@@ -23,7 +23,7 @@ exclude_lines =
     def __repr__
     raise NotImplementedError
     if __name__ == .__main__:
-    pass
+    def .*:.*pass
 
 [xml]
 # Output file for XML coverage report (used by SonarCloud)
