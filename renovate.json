@@ -20,10 +20,7 @@
     },
     {
       "matchManagers": ["github-actions"],
-      "addLabels": ["dependencies", "github-actions"]
-    },
-    {
-      "matchManagers": ["github-actions"],
+      "addLabels": ["dependencies", "github-actions"],
       "matchUpdateTypes": ["minor", "patch"],
       "automerge": true
     }
