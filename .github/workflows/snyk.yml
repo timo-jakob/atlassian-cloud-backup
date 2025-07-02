@@ -1,4 +1,7 @@
 name: Snyk Security Scan
+permissions:
+  contents: read
+  security-events: write
 
 on:
   pull_request:
