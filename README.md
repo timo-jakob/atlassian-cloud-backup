@@ -47,7 +47,7 @@ The application implements a **fresh backup approach** that prioritizes new back
 
 - **Automatic Recovery**: When no consolidated backup status file exists, the application starts with an empty status and triggers fresh backups
 - **Fresh Backup Strategy**: Always attempts to create new backups without relying on previous backup status discovery
-- **Status Tracking**: Uses Metainformations from filenames to track successful backup operations across multiple sites. No extra separate status file required.
+- **Status Tracking**: Uses metadata from filenames to track successful backup operations across multiple sites. No extra separate status file required.
 - **Seamless Integration**: Works transparently with existing backup operations
 
 ## ⚙️ Smart Backup Management
