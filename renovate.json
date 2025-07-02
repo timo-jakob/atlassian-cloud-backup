@@ -4,7 +4,7 @@
     "config:recommended",
     ":enablePreCommit"
   ],
-  "enabledManagers": ["pip_requirements"],
+  "enabledManagers": ["pip_requirements", "github-actions"],
   "pip_requirements": {
     "fileMatch": ["(^|/)requirements.*\\.txt$"]
   },
@@ -17,6 +17,12 @@
       "matchManagers": ["pip_requirements"],
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "addLabels": ["dependencies", "github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
     }
   ],
   "schedule": ["at any time"]

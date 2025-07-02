@@ -48,19 +48,21 @@ jobs:
     - name: Run Pytest with coverage
       run: |
         source venv/bin/activate
+        # Make sure we're in the project root directory
+        cd $GITHUB_WORKSPACE
         # Set PYTHONPATH to ensure proper imports
         export PYTHONPATH="${PYTHONPATH}:$(pwd)"
         # Clear any previous coverage data
         python -m coverage erase
         # Run all tests with coverage
-        python -m pytest tests/ --cov=src/atlassian_cloud_backup --cov-config=.coveragerc --junit-xml=test-results.xml
+        python -m pytest tests/ --cov=src --cov-config=.coveragerc --junit-xml=test-results.xml
         # Generate coverage reports for SonarCloud
         python -m coverage xml
         # Print coverage report
         python -m coverage report --show-missing
         
     - name: SonarCloud Scan
-      uses: SonarSource/sonarcloud-github-action@v2.1.1
+      uses: SonarSource/sonarqube-scan-action@v5.2.0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
