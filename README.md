@@ -39,16 +39,14 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-No Docker or other container environments are needed. The application is designed to be easily used from the terminal. When run for the first time, it will interactively guide you through configuration, requesting and securely storing required credentials.
+No Docker or other container environments are needed. The application is designed to be easily used from very basic setups. When run for the first time, it will interactively guide you through configuration, requesting and then storing required credentials in the user's home directory.
 
 ## ✨ Fresh Backup Strategy
 
 The application implements a **fresh backup approach** that prioritizes new backups over discovering existing files:
 
-- **Automatic Recovery**: When no consolidated backup status file exists, the application starts with an empty status and triggers fresh backups
-- **Fresh Backup Strategy**: Always attempts to create new backups without relying on previous backup status discovery
-- **Status Tracking**: Uses metadata from filenames to track successful backup operations across multiple sites. No extra separate status file required.
-- **Seamless Integration**: Works transparently with existing backup operations
+- **Fresh Backup Strategy**: Always attempts to create new backups
+- **Status Tracking**: Uses metadata from filenames to track successful backup operations. No dependency on status files.
 
 ## ⚙️ Smart Backup Management
 
@@ -56,14 +54,14 @@ The application is designed to work intelligently with Atlassian's backup freque
 
 - **Frequency Limit Handling**: Respects Atlassian's backup frequency limits while maximizing backup freshness
 - **Clear Audit Information**: Provides detailed audit logs explaining each backup decision and outcome
-- **Most Efficient Strategy**: If Atlassian blocks triggering a new backup but has a newer server backup available, the application automatically downloads the newer version
+- **Most Efficient Strategy**: If Atlassian blocks triggering a new backup but has a newer backup available, this one is used instead.
 - **Backup Verification**: Every downloaded backup is thoroughly verified to ensure data integrity
 
 ## 🌐 Multi-Instance Support
 
 Currently, the application supports:
 - Backup of multiple Atlassian Cloud instances
-- Single user authentication per execution (multi-user support planned for future versions)
+- One user authentication (multi-user support planned for future versions)
 
 ## 🔮 Vision
 
