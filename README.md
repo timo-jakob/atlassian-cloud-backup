@@ -12,7 +12,6 @@ This application is designed to be an extremely reliable backup solution for **A
 
 - **Network Resilience**: Implements retry mechanisms with exponentially increasing wait times for handling network interruptions
 - **Download Resumption**: Uses HTTP partial content requests to resume interrupted downloads where they left off
-- **Data Integrity**: Verifies backup ZIP files to ensure they aren't corrupted and contain valid data
 - **Fail-Safe Operation**: Always times out after 1 hour in non-interactive mode (e.g., cron jobs) to ensure system responsiveness
 - **Error Recovery**: Gracefully handles and logs errors, maintaining audit trails of all operations
 - **Missing Configuration**: Guides users through setup or exits cleanly in automated environments
