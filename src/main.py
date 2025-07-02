@@ -10,9 +10,13 @@ import click
 from datetime import datetime
 import configparser  # Added import
 from pathlib import Path  # Added import
+import select
+import termios
 
 import sys
 import os
+
+USER_INPUT_TIMEOUT_SECONDS = 3600  # 1 hour timeout for user input
 
 # Add the current directory to the path so imports work correctly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,11 +44,104 @@ def get_config_value(env_var, prop_key, default=None):
         return config['atlassian'][prop_key]
     return default
 
-def validate_credentials(username, api_token):
+def prompt_for_config(prompt, current_value=None, default=None):
+    """Helper to prompt for a configuration value with a timeout."""
+    if current_value:
+        prompt_text = f"{prompt} [{current_value}]: "
+    elif default:
+        prompt_text = f"{prompt} [{default}]: "
+    else:
+        prompt_text = f"{prompt}: "
+    
+    sys.stdout.write(prompt_text)
+    sys.stdout.flush()
+    
+    ready, _, _ = select.select([sys.stdin], [], [], USER_INPUT_TIMEOUT_SECONDS) # 1 hour timeout
+    
+    if ready:
+        value = sys.stdin.readline().strip()
+    else:
+        logging.error("Timeout waiting for user input. Exiting.")
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        sys.exit(1)
+
+    if not value:
+        return current_value or default
+    return value
+
+def handle_mandatory_field(key, env_var):
+    """Handle a single mandatory configuration field."""
+    current_value = get_config_value(env_var, key)
+    if not current_value:
+        if not sys.stdin.isatty():
+            logging.error(f"Mandatory configuration '{key}' is missing and the application is running in a non-interactive mode. Exiting.")
+            sys.exit(1)
+        new_value = prompt_for_config(f"Enter {key.replace('_', ' ')}")
+        config['atlassian'][key] = new_value
+        return True
+    return False
+
+def handle_optional_field(key, env_var, default):
+    """Handle a single optional configuration field."""
+    current_value = get_config_value(env_var, key)
+    if not sys.stdin.isatty():
+        if not current_value:
+            config['atlassian'][key] = default
+            return True
+    else:
+        new_value = prompt_for_config(f"Enter {key.replace('_', ' ')}", current_value, default)
+        if new_value != config.get('atlassian', key, fallback=None):
+            config['atlassian'][key] = new_value
+            return True
+    return False
+
+def ensure_configuration(properties_file_path):
+    """Ensure all necessary configurations are set, prompting the user if needed."""
+    if properties_file_path.exists():
+        config.read(properties_file_path)
+        logging.info(f"Loaded configuration from {properties_file_path}")
+
+    if 'atlassian' not in config:
+        config['atlassian'] = {}
+
+    mandatory_fields = {
+        'username': 'ATLASSIAN_USERNAME',
+        'api_token': 'ATLASSIAN_API_TOKEN',
+        'backup_target_directory': 'BACKUP_TARGET_DIRECTORY'
+    }
+    optional_fields = {
+        'instances': ('ATLASSIAN_INSTANCES', ''),
+        'poll_interval_seconds': ('POLL_INTERVAL_SECONDS', '30')
+    }
+
+    # Check if all mandatory fields are present
+    all_mandatory_present = all(get_config_value(env_var, key) for key, env_var in mandatory_fields.items())
+
+    # Only prompt for configuration if mandatory fields are missing
+    if not all_mandatory_present:
+        print("Welcome to the Atlassian Cloud Backup tool!")
+        logging.info("Some mandatory configuration is missing. Let's configure it.")
+
+        config_changed = False
+        for key, env_var in mandatory_fields.items():
+            if handle_mandatory_field(key, env_var):
+                config_changed = True
+        
+        for key, (env_var, default) in optional_fields.items():
+            if handle_optional_field(key, env_var, default):
+                config_changed = True
+
+        if config_changed:
+            properties_file_path.parent.mkdir(exist_ok=True)
+            with open(properties_file_path, 'w') as configfile:
+                config.write(configfile)
+            logging.info(f"Configuration saved to {properties_file_path}")
+
+def validate_credentials(username, api_token, backup_target_directory):
     """Validate that required credentials are provided."""
-    if not all([username, api_token]):
+    if not all([username, api_token, backup_target_directory]):
         logging.error(
-            'Missing ATLASSIAN_USERNAME/username or ATLASSIAN_API_TOKEN/api_token in environment variables or properties file.'
+            'Missing ATLASSIAN_USERNAME/username, ATLASSIAN_API_TOKEN/api_token, or BACKUP_TARGET_DIRECTORY/backup_target_directory in environment variables or properties file.'
         )
         return False
     return True
@@ -104,12 +201,9 @@ def main():
     """
     # Initialize properties file
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
-    
-    if properties_file_path.exists():
-        config.read(properties_file_path)
-        logging.info(f"Loaded configuration from {properties_file_path}")
-    else:
-        logging.info(f"Properties file not found at {properties_file_path}, using environment variables or defaults.")
+    properties_file_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure all parent directories exist
+
+    ensure_configuration(properties_file_path)
 
     # Get instance names
     instance_names = get_config_value('ATLASSIAN_INSTANCES', 'instances', '')
@@ -132,7 +226,7 @@ def main():
     backup_target_directory = runtime_config['backup_target_directory']
 
     # Validate credentials
-    if not validate_credentials(username, api_token):
+    if not validate_credentials(username, api_token, backup_target_directory):
         sys.exit(1)
     
     logging.info('Will process %d Atlassian instances: %s', len(urls), ', '.join(urls))
