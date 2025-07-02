@@ -68,3 +68,12 @@ Currently, the application supports:
 ## 🔮 Vision
 
 The primary goal is to provide the most up-to-date backups possible within Atlassian's limits, with maximum efficiency and reliability. By intelligently working with the platform's limitations and providing clear feedback, the application ensures you always have the freshest possible backups of your valuable Atlassian data.
+
+### 🎯 Quality Standards
+
+As the owner of this repository, maintaining high quality standards is essential to me:
+
+- **Clean SonarCloud Ratings**: All aspects including Security, Reliability, and Maintainability must maintain top ratings
+- **Zero Security Hotspots**: All security hotspots are addressed promptly
+- **No Vulnerabilities**: Ensuring no vulnerabilities are detected by Snyk security scanning
+- **High Test Coverage**: Maintaining comprehensive test coverage across all components
