@@ -54,7 +54,7 @@ def prompt_for_config(prompt, current_value=None, default=None):
     sys.stdout.write(prompt_text)
     sys.stdout.flush()
     
-    ready, _, _ = select.select([sys.stdin], [], [], 3600) # 1 hour timeout
+    ready, _, _ = select.select([sys.stdin], [], [], USER_INPUT_TIMEOUT_SECONDS) # 1 hour timeout
     
     if ready:
         value = sys.stdin.readline().strip()
