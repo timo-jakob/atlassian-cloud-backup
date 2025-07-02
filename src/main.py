@@ -199,7 +199,7 @@ def main():
     """
     # Initialize properties file
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
-    properties_file_path.parent.mkdir(exist_ok=True)  # Ensure the directory exists
+    properties_file_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure all parent directories exist
 
     ensure_configuration(properties_file_path)
 
