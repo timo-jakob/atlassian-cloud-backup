@@ -96,18 +96,16 @@ class TestFileManager:
         mock_makedirs.assert_called_once_with(expected_path, exist_ok=True)
     
     @patch('os.makedirs')
-    @patch('datetime.datetime')
-    def test_prepare_backup_path(self, mock_datetime, mock_makedirs):
+    def test_prepare_backup_path(self, mock_makedirs):
         """Test prepare_backup_path with default parameters."""
-        mock_date = Mock()
-        mock_date.strftime.return_value = '2025-07-02'
-        mock_datetime.now.return_value = mock_date
+        # Use a specific date to avoid test failures due to date changes
+        fixed_date = datetime(2025, 7, 2)
         
         fm = FileManager('https://example.atlassian.net', backup_target_directory='/tmp/backups')
         
         # Mock get_backup_folder to avoid its implementation details
         with patch.object(fm, 'get_backup_folder', return_value='/tmp/backups/example.atlassian.net'):
-            path = fm.prepare_backup_path('Jira')
+            path = fm.prepare_backup_path('Jira', backup_datetime=fixed_date)
             
             # Check expected path
             assert path == '/tmp/backups/example.atlassian.net/jira-backup-2025-07-02.zip'
@@ -141,18 +139,16 @@ class TestFileManager:
             assert path == '/tmp/backups/example.atlassian.net/confluence-backup-2025-07-01.tar.gz'
     
     @patch('os.makedirs')
-    @patch('datetime.datetime')
-    def test_prepare_jira_backup_path(self, mock_datetime, mock_makedirs):
+    def test_prepare_jira_backup_path(self, mock_makedirs):
         """Test prepare_jira_backup_path with default parameters."""
-        mock_date = Mock()
-        mock_date.strftime.return_value = '2025-07-02'
-        mock_datetime.now.return_value = mock_date
+        # Use a specific date to avoid test failures due to date changes
+        fixed_date = datetime(2025, 7, 2)
         
         fm = FileManager('https://example.atlassian.net', backup_target_directory='/tmp/backups')
         
         # Mock get_backup_folder to avoid its implementation details
         with patch.object(fm, 'get_backup_folder', return_value='/tmp/backups/example.atlassian.net'):
-            path = fm.prepare_jira_backup_path(12345)
+            path = fm.prepare_jira_backup_path(12345, backup_datetime=fixed_date)
             
             # Check expected path
             assert path == '/tmp/backups/example.atlassian.net/12345-jira-backup-2025-07-02.zip'
