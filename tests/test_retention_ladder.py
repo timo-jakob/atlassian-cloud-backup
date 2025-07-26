@@ -24,10 +24,7 @@ from atlassian_cloud_backup.thinning.manager import (
     DeletionConfig
 )
 
-from atlassian_cloud_backup.thinning.manager import (
-    BackupInfo,
-    BackupRetentionLadder
-)
+# Removed redundant import block
 
 
 class TestBackupRetentionLadderDetailed:
