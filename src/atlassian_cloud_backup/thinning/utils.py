@@ -14,14 +14,18 @@ def estimate_backup_size(path: Path) -> int:
     
     total_size = 0
     if path.is_file():
-        return path.stat().st_size
+        try:
+            return path.stat().st_size
+        except OSError:
+            # Skip files we can't access
+            return 0
     
     # For directories, calculate total size of all files
     for item in path.rglob("*"):
         if item.is_file():
             try:
                 total_size += item.stat().st_size
-            except (OSError, PermissionError):
+            except OSError:
                 # Skip files we can't access
                 continue
     
