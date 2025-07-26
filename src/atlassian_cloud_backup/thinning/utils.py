@@ -89,6 +89,7 @@ def human_readable_to_bytes(size_str: str) -> int:
         raise ValueError(f"Unknown unit: {unit}")
 
     return int(number * multipliers[unit])
+
 def calculate_percentage(used: int, total: int) -> float:
     """Calculate percentage of used space."""
     if total == 0:
