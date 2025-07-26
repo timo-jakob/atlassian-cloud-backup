@@ -122,7 +122,7 @@ class TestThinningSettings:
 
 
 class TestThinningConfig:
-    """Test the ThinningConfig class ."""
+    """Test the ThinningConfig class."""
     
     def test_thinning_config_creation(self):
         """Test creating ThinningConfig instance."""
