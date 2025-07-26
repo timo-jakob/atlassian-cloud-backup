@@ -23,8 +23,6 @@ from atlassian_cloud_backup.thinning.manager import (
     BackupDeleter,
     DeletionConfig
 )
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from atlassian_cloud_backup.thinning.manager import (
     BackupInfo,
