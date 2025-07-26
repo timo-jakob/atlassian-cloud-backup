@@ -120,6 +120,43 @@ class TestThinningSettings:
         with pytest.raises(ValueError, match="Max size must be positive"):
             settings.validate()
 
+    def test_thinning_settings_validate_invalid_strategy(self):
+        """Test validation with invalid deletion strategy."""
+        settings = ThinningSettings(
+            max_size_bytes=1000000000,
+            backup_directory="/backups",
+            deletion_strategy="invalid_strategy",  # Invalid strategy
+            warning_threshold=0.8
+        )
+        
+        with pytest.raises(ValueError, match="deletion_strategy must be one of"):
+            settings.validate()
+
+    def test_thinning_settings_validate_invalid_keep_count(self):
+        """Test validation with invalid keep count."""
+        settings = ThinningSettings(
+            max_size_bytes=1000000000,
+            backup_directory="/backups",
+            deletion_strategy="retention_ladder",
+            warning_threshold=0.8,
+            keep_count=0  # Invalid: must be at least 1
+        )
+        
+        with pytest.raises(ValueError, match="keep_count must be at least 1"):
+            settings.validate()
+
+    def test_thinning_settings_validate_relative_path(self):
+        """Test validation with relative backup directory path."""
+        settings = ThinningSettings(
+            max_size_bytes=1000000000,
+            backup_directory="relative/path",  # Invalid: not absolute
+            deletion_strategy="retention_ladder",
+            warning_threshold=0.8
+        )
+        
+        with pytest.raises(ValueError, match="backup_directory must be an absolute path"):
+            settings.validate()
+
 
 class TestThinningConfig:
     """Test the ThinningConfig class."""
@@ -201,6 +238,162 @@ class TestThinningConfig:
             assert settings.max_size_bytes == 2 * 1024 * 1024 * 1024 * 1024  # 2TB in bytes
             assert settings.deletion_strategy == "retention_ladder"
             assert settings.warning_threshold == 0.8
+
+    def test_thinning_config_load_invalid_json(self):
+        """Test loading configuration file with invalid JSON."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir)
+            config_file = config_path / "thinning_config.json"
+            
+            # Create file with invalid JSON
+            with open(config_file, 'w') as f:
+                f.write("{invalid json")
+            
+            thinning_config = ThinningConfig(config_path)
+            
+            with pytest.raises(ValueError, match="Invalid JSON in configuration file"):
+                thinning_config.load()
+
+    def test_thinning_config_load_missing_key(self):
+        """Test loading configuration file with missing required key."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir)
+            config_file = config_path / "thinning_config.json"
+            
+            # Create file with missing required key
+            with open(config_file, 'w') as f:
+                json.dump({
+                    "max_size_bytes": 1000000000,
+                    # Missing other required keys
+                }, f)
+            
+            thinning_config = ThinningConfig(config_path)
+            
+            with pytest.raises(ValueError, match="Missing required configuration key"):
+                thinning_config.load()
+
+    def test_thinning_config_from_environment(self):
+        """Test creating ThinningConfig from environment variable."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "env_config.json"
+            
+            # Test with environment variable set
+            with patch.dict('os.environ', {'THINNING_CONFIG_FILE': str(config_path)}):
+                config = ThinningConfig.from_environment()
+                assert config.config_file == config_path
+
+    def test_thinning_config_from_environment_default(self):
+        """Test creating ThinningConfig from environment with no variable set."""
+        # Test without environment variable (should use default)
+        with patch.dict('os.environ', {}, clear=True):
+            config = ThinningConfig.from_environment()
+            # Should create default config in home directory
+            assert config.config_file.name == "thinning_config.json"
+
+    def test_thinning_config_update_setting(self):
+        """Test updating a specific setting."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir)
+            thinning_config = ThinningConfig(config_path)
+            
+            # Create and load initial settings
+            settings = ThinningSettings(
+                max_size_bytes=1000000000,
+                backup_directory="/test/backups",
+                deletion_strategy="oldest_first",
+                warning_threshold=0.8
+            )
+            thinning_config.save(settings)
+            thinning_config.load()
+            
+            # Update a setting
+            thinning_config.update_setting("warning_threshold", 0.9)
+            
+            # Reload and verify
+            updated_settings = thinning_config.load()
+            assert abs(updated_settings.warning_threshold - 0.9) < 1e-6
+
+    def test_thinning_config_update_setting_no_settings_loaded(self):
+        """Test updating setting when no settings are loaded."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir)
+            thinning_config = ThinningConfig(config_path)
+            
+            with pytest.raises(ValueError, match="No settings loaded"):
+                thinning_config.update_setting("warning_threshold", 0.9)
+
+    def test_thinning_config_update_setting_unknown_key(self):
+        """Test updating an unknown setting key."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir)
+            thinning_config = ThinningConfig(config_path)
+            
+            # Create and load initial settings
+            settings = ThinningSettings(
+                max_size_bytes=1000000000,
+                backup_directory="/test/backups",
+                deletion_strategy="oldest_first",
+                warning_threshold=0.8
+            )
+            thinning_config.save(settings)
+            thinning_config.load()
+            
+            with pytest.raises(ValueError, match="Unknown setting"):
+                thinning_config.update_setting("unknown_key", "value")
+
+    def test_thinning_config_exists(self):
+        """Test the exists method."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config = ThinningConfig(config_path)
+            
+            # Config should not exist initially
+            assert not config.exists()
+            
+            # Create the config file
+            settings = ThinningSettings(
+                max_size_bytes=1000000,
+                warning_threshold=0.8,
+                deletion_strategy="oldest_first",
+                backup_directory="/test/backups"
+            )
+            config.save(settings)
+            
+            # Now it should exist
+            assert config.exists()
+
+    def test_thinning_config_file_path_constructor(self):
+        """Test ThinningConfig constructor with file path vs directory path."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            # Test with directory path (should add default filename)
+            config1 = ThinningConfig(temp_path)
+            assert config1.config_file == temp_path / "thinning_config.json"
+            assert config1.config_directory == temp_path
+            
+            # Test with specific file path
+            file_path = temp_path / "custom_config.json"
+            config2 = ThinningConfig(file_path)
+            assert config2.config_file == file_path
+            assert config2.config_directory == temp_path
+
+    def test_thinning_config_get_settings(self):
+        """Test getting currently loaded settings."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir)
+            config = ThinningConfig(config_path)
+            
+            # Should return None when no settings loaded
+            assert config.get_settings() is None
+            
+            # Load settings and verify get_settings returns them
+            settings = config.load()
+            loaded_settings = config.get_settings()
+            
+            assert loaded_settings is not None
+            assert loaded_settings.max_size_bytes == settings.max_size_bytes
+            assert loaded_settings.backup_directory == settings.backup_directory
 
 
 class TestUtilityFunctions:

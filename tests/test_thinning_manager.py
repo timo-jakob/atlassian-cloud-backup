@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
+import unittest.mock as mock
 
 # Import the modules under test
 import sys
@@ -805,3 +806,61 @@ class TestLongTermRetentionScenarios:
         
         # Should not delete anything since each backup is the only one in its period
         assert selected is None
+
+
+class TestDeletionStrategyAbstract:
+    """Test the abstract DeletionStrategy class."""
+    
+    def test_deletion_strategy_abstract_method(self):
+        """Test that DeletionStrategy is properly abstract."""
+        from atlassian_cloud_backup.thinning.manager import DeletionStrategy
+        
+        # Should not be able to instantiate abstract class
+        with pytest.raises(TypeError):
+            DeletionStrategy()
+
+
+class TestBackupDeleterErrorHandling:
+    """Test error handling in BackupDeleter."""
+    
+    def test_is_backup_file_unknown_type(self):
+        """Test _is_backup_file with unknown backup type."""
+        config = DeletionConfig()
+        config.deletion_strategy = "oldest_first"
+        deleter = BackupDeleter(config)
+        
+        # Should return False for unknown backup type (line 231)
+        result = deleter._is_backup_file("test-backup-2025-01-01.zip", "unknown_type")
+        assert result is False
+    
+    def test_is_backup_file_confluence_edge_cases(self):
+        """Test _is_backup_file with various Confluence filename patterns."""
+        config = DeletionConfig()
+        config.deletion_strategy = "oldest_first"
+        deleter = BackupDeleter(config)
+        
+        # Test valid Confluence backup file
+        assert deleter._is_backup_file("confluence-backup-2025-01-01.zip", "confluence") is True
+        
+        # Test case insensitive
+        assert deleter._is_backup_file("CONFLUENCE-BACKUP-2025-01-01.ZIP", "confluence") is True
+        
+        # Test invalid patterns
+        assert deleter._is_backup_file("jira-backup-2025-01-01.zip", "confluence") is False
+        assert deleter._is_backup_file("backup-confluence-2025-01-01.zip", "confluence") is False
+    
+    def test_is_backup_file_jira_edge_cases(self):
+        """Test _is_backup_file with various JIRA filename patterns."""
+        config = DeletionConfig()
+        config.deletion_strategy = "oldest_first"
+        deleter = BackupDeleter(config)
+        
+        # Test valid JIRA backup file
+        assert deleter._is_backup_file("123456-jira-backup-2025-01-01.zip", "jira") is True
+        
+        # Test case insensitive
+        assert deleter._is_backup_file("123456-JIRA-BACKUP-2025-01-01.ZIP", "jira") is True
+        
+        # Test invalid patterns
+        assert deleter._is_backup_file("confluence-backup-2025-01-01.zip", "jira") is False
+        assert deleter._is_backup_file("jira-123456-backup-2025-01-01.zip", "jira") is False
