@@ -59,7 +59,8 @@ def human_readable_to_bytes(size_str: str) -> int:
     elif len(parts) == 1:
         # Format like "1GB" - need to split number and unit
         import re
-        match = re.match(r'^(\d*\.?\d+)([A-Z]+)$', size_str)
+        # Use a more specific regex to avoid ReDoS - either integer or decimal with specific format
+        match = re.match(r'^(\d+(?:\.\d+)?)([A-Z]+)$', size_str)
         if match:
             number_str, unit = match.groups()
         else:
