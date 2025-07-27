@@ -4,9 +4,13 @@ import os
 import time
 import logging
 import requests
+import shutil
+from pathlib import Path
 from requests.auth import HTTPBasicAuth
 import http.client # For IncompleteRead
 import sys
+
+from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
 
 class DownloadError(Exception):
     """Raised when a download fails after all retry attempts."""
@@ -191,15 +195,35 @@ def _handle_range_response(response, current_expected_on_disk):
     return 'wb', 0
 
 def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, chunk_size, log_chunk_size, service_name, overall_start_time):
-    """Stream response content to file with progress logging, return total bytes written."""
+    """Stream response content to file with progress logging and disk space management, return total bytes written."""
     bytes_written = initial_bytes
     last_log_time = time.time()
     next_log_threshold = bytes_written + log_chunk_size
+    
+    # Set up disk space monitoring
+    file_path = Path(filename)
+    backup_directory = file_path.parent
+    minimum_free_space = chunk_size * 10  # Risk buffer: 10 times chunk size
+    
+    # Determine backup type from filename for thinning strategy
+    backup_type = _detect_backup_type_from_filename(filename)
+    
+    # Initialize backup deleter for space management
+    deletion_config = DeletionConfig()
+    deletion_config.deletion_strategy = "oldest_first"  # Use oldest_first strategy for space management
+    backup_deleter = BackupDeleter(deletion_config)
 
     with open(filename, file_open_mode) as f:
         for chunk in response.iter_content(chunk_size=chunk_size):
             if not chunk:
                 continue
+                
+            # Check disk space before writing the chunk
+            _ensure_disk_space_available(
+                backup_directory, minimum_free_space, backup_type, 
+                backup_deleter, service_name
+            )
+            
             f.write(chunk)
             bytes_written += len(chunk)
             current_time = time.time()
@@ -249,3 +273,71 @@ def _prepare_range_request(current_expected_on_disk, attempt, max_retries):
         )
         return {'Range': f'bytes={current_expected_on_disk}-'}
     return {}
+
+def _detect_backup_type_from_filename(filename):
+    """Detect backup type (jira or confluence) from filename."""
+    filename_lower = Path(filename).name.lower()
+    if "jira" in filename_lower:
+        return "jira"
+    elif "confluence" in filename_lower:
+        return "confluence"
+    else:
+        # Default to jira if unclear
+        return "jira"
+
+def _ensure_disk_space_available(backup_directory, minimum_free_space, backup_type, backup_deleter, service_name):
+    """Ensure sufficient disk space is available, delete old backups if necessary."""
+    try:
+        # Get available disk space
+        _, _, free_bytes = shutil.disk_usage(backup_directory)
+        
+        # Check if we have enough space
+        if free_bytes >= minimum_free_space:
+            return  # Sufficient space available
+        
+        logging.warning(
+            f"Low disk space detected during {service_name} download. "
+            f"Free space: {free_bytes / (1024*1024):.1f} MB, "
+            f"Required: {minimum_free_space / (1024*1024):.1f} MB. "
+            f"Attempting to free space by deleting old {backup_type} backups."
+        )
+        
+        # Try to delete old backups to free space
+        deleted_files = 0
+        max_deletion_attempts = 5  # Prevent infinite loop
+        
+        while free_bytes < minimum_free_space and deleted_files < max_deletion_attempts:
+            # Use the backup deleter to remove one old backup
+            deleted_file = backup_deleter.delete_one_backup(backup_directory, backup_type)
+            
+            if deleted_file is None:
+                # No more files to delete
+                logging.warning(
+                    f"No more {backup_type} backup files to delete in {backup_directory}. "
+                    f"Free space: {free_bytes / (1024*1024):.1f} MB"
+                )
+                break
+            
+            deleted_files += 1
+            logging.info(f"Deleted old backup file: {deleted_file}")
+            
+            # Refresh free space after deletion
+            _, _, free_bytes = shutil.disk_usage(backup_directory)
+            
+        if free_bytes >= minimum_free_space:
+            logging.info(
+                f"Successfully freed disk space. "
+                f"Free space: {free_bytes / (1024*1024):.1f} MB, "
+                f"Deleted {deleted_files} old backup files."
+            )
+        else:
+            logging.warning(
+                f"Still insufficient disk space after deleting {deleted_files} files. "
+                f"Free space: {free_bytes / (1024*1024):.1f} MB, "
+                f"Required: {minimum_free_space / (1024*1024):.1f} MB. "
+                f"Download may fail due to insufficient disk space."
+            )
+            
+    except Exception as e:
+        logging.error(f"Error checking or managing disk space: {e}")
+        # Continue download attempt even if space management fails

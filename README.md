@@ -12,6 +12,7 @@ This application is designed to be an extremely reliable backup solution for **A
 
 - **Network Resilience**: Implements retry mechanisms with exponentially increasing wait times for handling network interruptions
 - **Download Resumption**: Uses HTTP partial content requests to resume interrupted downloads where they left off
+- **Intelligent Disk Space Management**: Automatically monitors disk space during downloads and removes old backup files when space runs low, ensuring downloads never fail due to insufficient storage
 - **Fail-Safe Operation**: Always times out after 1 hour in non-interactive mode (e.g., cron jobs) to ensure system responsiveness
 - **Error Recovery**: Gracefully handles and logs errors, maintaining audit trails of all operations
 - **Missing Configuration**: Guides users through setup or exits cleanly in automated environments
@@ -57,6 +58,20 @@ The application is designed to work intelligently with Atlassian's backup freque
 - **Most Efficient Strategy**: If Atlassian blocks triggering a new backup but has a newer backup available, this one is used instead.
 - **Backup Verification**: Every downloaded backup is thoroughly verified to ensure data integrity
 
+## 💾 Intelligent Disk Space Management
+
+The application includes advanced disk space management to ensure reliable operation even in storage-constrained environments:
+
+- **Proactive Space Monitoring**: Continuously monitors available disk space during downloads, checking before each data chunk
+- **Smart Cleanup Strategy**: Automatically removes old backup files when space runs low, using configurable deletion strategies
+- **Safety Buffer**: Maintains a 10x chunk size buffer (typically ~80KB) to prevent mid-download failures
+- **Type-Aware Deletion**: Intelligently identifies backup types (Jira/Confluence) and only deletes files of the same type as the current download
+- **Oldest-First Strategy**: Prioritizes deletion of the oldest backup files first to preserve recent backups
+- **Fail-Safe Limits**: Prevents infinite deletion loops with built-in safety limits
+- **Detailed Logging**: Provides comprehensive logging of all space management activities
+
+> 💡 **Smart Feature**: The system will never delete backup files unless absolutely necessary, and when it does, it intelligently preserves your most recent backups while making room for new ones.
+
 ## 🌐 Multi-Instance Support
 
 Currently, the application supports:
@@ -65,7 +80,7 @@ Currently, the application supports:
 
 ## 🔮 Vision
 
-The primary goal is to provide the most up-to-date backups possible within Atlassian's limits, with maximum efficiency and reliability. By intelligently working with the platform's limitations and providing clear feedback, the application ensures you always have the freshest possible backups of your valuable Atlassian data.
+The primary goal is to provide the most up-to-date backups possible within Atlassian's limits, with maximum efficiency and reliability. By intelligently working with the platform's limitations, managing storage resources automatically, and providing clear feedback, the application ensures you always have the freshest possible backups of your valuable Atlassian data without worrying about storage constraints.
 
 ### 🎯 Quality Standards
 
