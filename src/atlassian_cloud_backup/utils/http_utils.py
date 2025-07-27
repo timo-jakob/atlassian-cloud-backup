@@ -78,6 +78,12 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         if bytes_successfully_written_to_disk > 0:
             logging.info(f"Found existing partial file: {filename}, size: {bytes_successfully_written_to_disk} bytes. Will attempt to resume.")
 
+    # Initialize backup deleter once for the entire download
+    backup_type = _detect_backup_type_from_filename(filename)
+    deletion_config = DeletionConfig()
+    deletion_config.deletion_strategy = "oldest_first"  # Use oldest_first strategy for space management
+    backup_deleter = BackupDeleter(deletion_config)
+
     # Define the actual download attempt function
     def _do_attempt(attempt):
         return _attempt_download(
@@ -85,7 +91,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
             chunk_size, log_chunk_size,
             os.path.getsize(filename) if os.path.exists(filename) else 0,
             overall_start_time,
-            attempt, MAX_DOWNLOAD_RETRIES
+            attempt, MAX_DOWNLOAD_RETRIES, backup_type, backup_deleter
         )
     try:
         bytes_written = _retry_download(
@@ -135,7 +141,7 @@ def _retry_download(download_fn, filename, service_name, max_retries, initial_de
 def _attempt_download(url, filename, username, api_token, service_name,
                       chunk_size, log_chunk_size,
                       current_expected_on_disk, overall_start_time,
-                      attempt, max_retries):
+                      attempt, max_retries, backup_type, backup_deleter):
     """Perform a single download attempt, handling range and streaming."""
     headers = _prepare_range_request(current_expected_on_disk, attempt, max_retries)
     
@@ -173,7 +179,8 @@ def _attempt_download(url, filename, username, api_token, service_name,
     
     return _stream_response_to_file(
         response, filename, file_open_mode, start_bytes,
-        chunk_size, log_chunk_size, service_name, overall_start_time
+        chunk_size, log_chunk_size, service_name, overall_start_time,
+        backup_type, backup_deleter
     )
 
 def _handle_range_response(response, current_expected_on_disk):
@@ -194,7 +201,7 @@ def _handle_range_response(response, current_expected_on_disk):
     # fresh download
     return 'wb', 0
 
-def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, chunk_size, log_chunk_size, service_name, overall_start_time):
+def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, chunk_size, log_chunk_size, service_name, overall_start_time, backup_type, backup_deleter):
     """Stream response content to file with progress logging and disk space management, return total bytes written."""
     bytes_written = initial_bytes
     last_log_time = time.time()
@@ -204,14 +211,6 @@ def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, 
     file_path = Path(filename)
     backup_directory = file_path.parent
     minimum_free_space = chunk_size * 10  # Risk buffer: 10 times chunk size
-    
-    # Determine backup type from filename for thinning strategy
-    backup_type = _detect_backup_type_from_filename(filename)
-    
-    # Initialize backup deleter for space management
-    deletion_config = DeletionConfig()
-    deletion_config.deletion_strategy = "oldest_first"  # Use oldest_first strategy for space management
-    backup_deleter = BackupDeleter(deletion_config)
 
     with open(filename, file_open_mode) as f:
         for chunk in response.iter_content(chunk_size=chunk_size):

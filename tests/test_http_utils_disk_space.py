@@ -187,26 +187,31 @@ class TestStreamResponseWithDiskManagement:
     
     def test_stream_with_sufficient_space(self):
         """Test streaming when disk space is sufficient throughout."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             filename = temp_path / "jira-backup-2025-07-27.zip"
-            
+
             # Mock response with test content
             mock_response = Mock()
             test_content = [b"chunk1", b"chunk2", b"chunk3"]
             mock_response.iter_content.return_value = test_content
-            
+
+            # Create backup deleter instance for test
+            deletion_config = DeletionConfig()
+            backup_deleter = BackupDeleter(deletion_config)
+
             # Mock sufficient disk space
             with patch('atlassian_cloud_backup.utils.http_utils.shutil.disk_usage') as mock_disk_usage:
                 mock_disk_usage.return_value = (100_000_000, 50_000_000, 50_000_000)  # 50MB free
-                
+
                 bytes_written = _stream_response_to_file(
-                    mock_response, str(filename), 'wb', 0, 
-                    chunk_size=1024, log_chunk_size=1024*1024, 
-                    service_name="test-service", overall_start_time=0
-                )
-                
-                # Should write all content
+                    mock_response, str(filename), 'wb', 0,
+                    chunk_size=1024, log_chunk_size=1024*1024,
+                    service_name="test-service", overall_start_time=0,
+                    backup_type="jira", backup_deleter=backup_deleter
+                )                # Should write all content
                 assert bytes_written == len(b"chunk1chunk2chunk3")
                 
                 # Verify file was written
@@ -215,25 +220,28 @@ class TestStreamResponseWithDiskManagement:
     
     def test_stream_triggers_space_management(self):
         """Test that space management is triggered during streaming."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             filename = temp_path / "jira-backup-2025-07-27.zip"
-            
+
             # Create an old backup file to be deleted
             old_backup = temp_path / "old-jira-backup-2024-01-01.zip"
             old_backup.write_text("old backup content")
-            
+
             # Mock response with test content
             mock_response = Mock()
             test_content = [b"chunk1", b"chunk2"]
             mock_response.iter_content.return_value = test_content
-            
-            # Mock BackupDeleter
-            with patch('atlassian_cloud_backup.utils.http_utils.BackupDeleter') as mock_deleter_class:
-                mock_deleter = Mock()
-                mock_deleter_class.return_value = mock_deleter
-                mock_deleter.delete_one_backup.return_value = old_backup
-                
+
+            # Create backup deleter instance for test
+            deletion_config = DeletionConfig()
+            backup_deleter = BackupDeleter(deletion_config)
+
+            # Mock the delete_one_backup method on our actual instance
+            with patch.object(backup_deleter, 'delete_one_backup', return_value=str(old_backup)) as mock_delete:
+
                 # Mock disk space - insufficient initially, then sufficient after deletion
                 with patch('atlassian_cloud_backup.utils.http_utils.shutil.disk_usage') as mock_disk_usage:
                     mock_disk_usage.side_effect = [
@@ -242,18 +250,17 @@ class TestStreamResponseWithDiskManagement:
                         (100_000_000, 50_000_000, 50_000_000), # Second chunk: sufficient
                         (100_000_000, 50_000_000, 50_000_000)  # After deletion: sufficient
                     ]
-                    
+
                     bytes_written = _stream_response_to_file(
-                        mock_response, str(filename), 'wb', 0, 
-                        chunk_size=1024, log_chunk_size=1024*1024, 
-                        service_name="test-service", overall_start_time=0
-                    )
-                    
-                    # Should still write all content
+                        mock_response, str(filename), 'wb', 0,
+                        chunk_size=1024, log_chunk_size=1024*1024,
+                        service_name="test-service", overall_start_time=0,
+                        backup_type="jira", backup_deleter=backup_deleter
+                    )                    # Should still write all content
                     assert bytes_written == len(b"chunk1chunk2")
                     
                     # Should have triggered space management
-                    mock_deleter.delete_one_backup.assert_called_with(temp_path, "jira")
+                    mock_delete.assert_called_with(temp_path, "jira")
                     
                     # Verify file was written
                     assert filename.exists()

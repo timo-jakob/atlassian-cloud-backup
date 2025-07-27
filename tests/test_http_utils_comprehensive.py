@@ -362,22 +362,27 @@ class TestStreamResponseEdgeCases:
     
     def test_stream_response_empty_chunks(self):
         """Test streaming with empty chunks in response."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             filename = os.path.join(temp_dir, "test.zip")
-            
+
             # Mock response with empty chunks
             mock_response = Mock()
             mock_response.iter_content.return_value = [b"data", b"", b"more", b"", b"data"]
-            
+
+            # Create backup deleter instance for test
+            deletion_config = DeletionConfig()
+            backup_deleter = BackupDeleter(deletion_config)
+
             # Mock disk space functions
             with patch('atlassian_cloud_backup.utils.http_utils._ensure_disk_space_available'):
                 bytes_written = _stream_response_to_file(
-                    mock_response, filename, 'wb', 0, 
-                    chunk_size=1024, log_chunk_size=1024*1024, 
-                    service_name="test-service", overall_start_time=time.time()
-                )
-            
-            # Should only count non-empty chunks
+                    mock_response, filename, 'wb', 0,
+                    chunk_size=1024, log_chunk_size=1024*1024,
+                    service_name="test-service", overall_start_time=time.time(),
+                    backup_type="jira", backup_deleter=backup_deleter
+                )            # Should only count non-empty chunks
             assert bytes_written == len(b"datamore" + b"data")
             
             # Verify file content
@@ -386,24 +391,31 @@ class TestStreamResponseEdgeCases:
     
     def test_stream_response_progress_logging_threshold(self):
         """Test that progress logging happens at correct thresholds."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             filename = os.path.join(temp_dir, "test.zip")
-            
+
             # Create chunks that will cross the logging threshold
             chunk_size = 1024
             log_chunk_size = 2048  # Small threshold for testing
             chunks = [b"x" * chunk_size] * 5  # 5KB total
-            
+
             mock_response = Mock()
             mock_response.iter_content.return_value = chunks
-            
+
+            # Create backup deleter instance for test
+            deletion_config = DeletionConfig()
+            backup_deleter = BackupDeleter(deletion_config)
+
             with patch('atlassian_cloud_backup.utils.http_utils._ensure_disk_space_available'), \
                  patch('atlassian_cloud_backup.utils.http_utils._log_download_progress') as mock_log:
-                
+
                 bytes_written = _stream_response_to_file(
-                    mock_response, filename, 'wb', 0, 
-                    chunk_size=chunk_size, log_chunk_size=log_chunk_size, 
-                    service_name="test-service", overall_start_time=time.time()
+                    mock_response, filename, 'wb', 0,
+                    chunk_size=chunk_size, log_chunk_size=log_chunk_size,
+                    service_name="test-service", overall_start_time=time.time(),
+                    backup_type="jira", backup_deleter=backup_deleter
                 )
             
             assert bytes_written == 5 * chunk_size
