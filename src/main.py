@@ -171,7 +171,7 @@ def validate_credentials(username, api_token, backup_target_directory):
         return False
     return True
 
-def process_single_backup(url, username, api_token, poll_interval, backup_target_directory):
+def process_single_backup(url, username, api_token, poll_interval, backup_target_directory, deletion_strategy):
     """Process backup for a single Atlassian instance.
     
     Returns:
@@ -184,7 +184,8 @@ def process_single_backup(url, username, api_token, poll_interval, backup_target
             username=username,
             api_token=api_token,
             poll_interval=poll_interval,
-            backup_target_directory=backup_target_directory
+            backup_target_directory=backup_target_directory,
+            deletion_strategy=deletion_strategy
         )
         controller.orchestrate()
         logging.info('Completed backup for %s', url)
@@ -203,7 +204,8 @@ def get_runtime_configuration():
         'username': get_config_value('ATLASSIAN_USERNAME', 'username'),
         'api_token': get_config_value('ATLASSIAN_API_TOKEN', 'api_token'),
         'poll_interval': int(get_config_value('POLL_INTERVAL_SECONDS', 'poll_interval_seconds', '30')),
-        'backup_target_directory': get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory')
+        'backup_target_directory': get_config_value('BACKUP_TARGET_DIRECTORY', 'backup_target_directory'),
+        'deletion_strategy': get_config_value('DELETION_STRATEGY', 'deletion_strategy', 'oldest_first')
     }
 
 @click.command()
@@ -223,6 +225,7 @@ def main():
     - POLL_INTERVAL_SECONDS / poll_interval_seconds: Optional, seconds to wait between API polling requests (default: 30)
     - BACKUP_TARGET_DIRECTORY / backup_target_directory: Optional, the base directory where backup files will be stored.
       If not provided, backups will be stored in subdirectories named after the instance URL in the current working directory.
+    - DELETION_STRATEGY / deletion_strategy: Optional, strategy for managing disk space when storage is low (default: "oldest_first")
     """
     # Initialize properties file
     properties_file_path = Path.home() / ".atlassian-cloud-backup" / "backup.properties"
@@ -249,6 +252,7 @@ def main():
     api_token = runtime_config['api_token']
     poll_interval = runtime_config['poll_interval']
     backup_target_directory = runtime_config['backup_target_directory']
+    deletion_strategy = runtime_config['deletion_strategy']
 
     # Validate credentials
     if not validate_credentials(username, api_token, backup_target_directory):
@@ -264,7 +268,7 @@ def main():
     success_count = 0
     for url in urls:
         # Process backup for each URL
-        if process_single_backup(url, username, api_token, poll_interval, backup_target_directory):
+        if process_single_backup(url, username, api_token, poll_interval, backup_target_directory, deletion_strategy):
             success_count += 1
             
     logging.info('Backup completed for %d of %d Atlassian instances', success_count, len(urls))

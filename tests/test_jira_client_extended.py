@@ -506,7 +506,8 @@ class TestJiraClientExtended:
             download_path,
             "test@example.com",
             "test-token",
-            "Jira"
+            "Jira",
+            deletion_strategy="oldest_first"
         )
     
     @patch('atlassian_cloud_backup.jira.client.download_file')

@@ -96,14 +96,15 @@ class TestProcessSingleBackup:
         """Test a successful backup process."""
         with patch("src.main.BackupController") as MockController:
             mock_instance = MockController.return_value
-            result = process_single_backup("https://test.atlassian.net", "user", "token", 30, "/path")
+            result = process_single_backup("https://test.atlassian.net", "user", "token", 30, "/path", "oldest_first")
             
             MockController.assert_called_with(
                 url="https://test.atlassian.net",
                 username="user",
                 api_token="token",
                 poll_interval=30,
-                backup_target_directory="/path"
+                backup_target_directory="/path",
+                deletion_strategy="oldest_first"
             )
             mock_instance.orchestrate.assert_called_once()
             assert result is True
@@ -115,7 +116,7 @@ class TestProcessSingleBackup:
             mock_instance.orchestrate.side_effect = Exception("Test error")
             
             with patch("logging.error") as mock_error:
-                result = process_single_backup("https://test.atlassian.net", "user", "token", 30, "/path")
+                result = process_single_backup("https://test.atlassian.net", "user", "token", 30, "/path", "oldest_first")
                 
                 mock_error.assert_called_once()
                 assert result is False
@@ -360,7 +361,8 @@ class TestMainCLI:
             "username": "user",
             "api_token": "token",
             "poll_interval": 30,
-            "backup_target_directory": "/path"
+            "backup_target_directory": "/path",
+            "deletion_strategy": "oldest_first"
         }
         mock_validate.return_value = True
         mock_process.return_value = True
@@ -381,7 +383,8 @@ class TestMainCLI:
             "user",
             "token",
             30,
-            "/path"
+            "/path",
+            "oldest_first"
         )
     
     @patch("src.main.ensure_configuration")
@@ -408,7 +411,8 @@ class TestMainCLI:
             "username": "user",
             "api_token": "token",
             "poll_interval": 30,
-            "backup_target_directory": "/path"
+            "backup_target_directory": "/path",
+            "deletion_strategy": "oldest_first"
         }
         mock_validate.return_value = False
         
@@ -433,7 +437,8 @@ class TestMainCLI:
             "username": "user",
             "api_token": "token",
             "poll_interval": 30,
-            "backup_target_directory": "/path"
+            "backup_target_directory": "/path",
+            "deletion_strategy": "oldest_first"
         }
         mock_validate.return_value = True
         mock_process.side_effect = [True, False]

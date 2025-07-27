@@ -49,7 +49,7 @@ def make_authenticated_request(method, url, username, api_token, **kwargs):
     response.raise_for_status()
     return response
 
-def download_file(url, filename, username, api_token, service_name, chunk_size=8192, log_chunk_size=100*1024*1024):
+def download_file(url, filename, username, api_token, service_name, chunk_size=8192, log_chunk_size=100*1024*1024, deletion_strategy="oldest_first"):
     """Download a file with progress tracking and retry/resume capabilities.
     
     Args:
@@ -60,6 +60,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         service_name (str): Name of the service for logging
         chunk_size (int): Size of chunks to download
         log_chunk_size (int): Size threshold for logging progress
+        deletion_strategy (str): Strategy for managing disk space when storage is low
         
     Returns:
         str: The filename of the downloaded file
@@ -81,7 +82,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
     # Initialize backup deleter once for the entire download
     backup_type = _detect_backup_type_from_filename(filename)
     deletion_config = DeletionConfig()
-    deletion_config.deletion_strategy = "oldest_first"  # Use oldest_first strategy for space management
+    deletion_config.deletion_strategy = deletion_strategy  # Use configured strategy for space management
     backup_deleter = BackupDeleter(deletion_config)
 
     # Define the actual download attempt function

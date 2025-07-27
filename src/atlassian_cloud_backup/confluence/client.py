@@ -16,7 +16,7 @@ DEFAULT_TIMEOUT_MINUTES = 600
 class ConfluenceClient:
     """Client for handling Confluence backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30, include_attachments=True, backup_target_directory=None, backup_timeout_minutes=DEFAULT_TIMEOUT_MINUTES):
+    def __init__(self, url, username, api_token, poll_interval=30, include_attachments=True, backup_target_directory=None, backup_timeout_minutes=DEFAULT_TIMEOUT_MINUTES, deletion_strategy="oldest_first"):
         """
         Initialize Confluence client.
         
@@ -28,6 +28,7 @@ class ConfluenceClient:
             include_attachments (bool): Whether to include attachments in backups
             backup_target_directory (str, optional): Base directory for backups
             backup_timeout_minutes (int, optional): Timeout in minutes for Confluence backup
+            deletion_strategy (str): Strategy for managing disk space when storage is low
         """
         self.url = url
         self.username = username
@@ -36,6 +37,7 @@ class ConfluenceClient:
         self.include_attachments = include_attachments
         self.backup_target_directory = backup_target_directory
         self.backup_timeout_minutes = backup_timeout_minutes
+        self.deletion_strategy = deletion_strategy
         
         # Log the URL being used
         logging.info('Connecting to Confluence instance at %s', self.url)
@@ -373,7 +375,7 @@ class ConfluenceClient:
         local_filename = download_details['filename']
         
         logging.info('Downloading Confluence backup from: %s', url)
-        return download_file(url, local_filename, self.username, self.api_token, "Confluence")
+        return download_file(url, local_filename, self.username, self.api_token, "Confluence", deletion_strategy=self.deletion_strategy)
     
     def _wait_and_download_backup(self, now, use_existing=False):
         """Wait for backup completion and download the file.
