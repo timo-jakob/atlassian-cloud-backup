@@ -4,9 +4,13 @@ import os
 import time
 import logging
 import requests
+import shutil
+from pathlib import Path
 from requests.auth import HTTPBasicAuth
 import http.client # For IncompleteRead
 import sys
+
+from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
 
 class DownloadError(Exception):
     """Raised when a download fails after all retry attempts."""
@@ -45,7 +49,7 @@ def make_authenticated_request(method, url, username, api_token, **kwargs):
     response.raise_for_status()
     return response
 
-def download_file(url, filename, username, api_token, service_name, chunk_size=8192, log_chunk_size=100*1024*1024):
+def download_file(url, filename, username, api_token, service_name, chunk_size=8192, log_chunk_size=100*1024*1024, deletion_strategy="oldest_first"):
     """Download a file with progress tracking and retry/resume capabilities.
     
     Args:
@@ -56,6 +60,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         service_name (str): Name of the service for logging
         chunk_size (int): Size of chunks to download
         log_chunk_size (int): Size threshold for logging progress
+        deletion_strategy (str): Strategy for managing disk space when storage is low
         
     Returns:
         str: The filename of the downloaded file
@@ -74,6 +79,12 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
         if bytes_successfully_written_to_disk > 0:
             logging.info(f"Found existing partial file: {filename}, size: {bytes_successfully_written_to_disk} bytes. Will attempt to resume.")
 
+    # Initialize backup deleter once for the entire download
+    backup_type = _detect_backup_type_from_filename(filename)
+    deletion_config = DeletionConfig()
+    deletion_config.deletion_strategy = deletion_strategy  # Use configured strategy for space management
+    backup_deleter = BackupDeleter(deletion_config)
+
     # Define the actual download attempt function
     def _do_attempt(attempt):
         return _attempt_download(
@@ -81,7 +92,7 @@ def download_file(url, filename, username, api_token, service_name, chunk_size=8
             chunk_size, log_chunk_size,
             os.path.getsize(filename) if os.path.exists(filename) else 0,
             overall_start_time,
-            attempt, MAX_DOWNLOAD_RETRIES
+            attempt, MAX_DOWNLOAD_RETRIES, backup_type, backup_deleter
         )
     try:
         bytes_written = _retry_download(
@@ -131,7 +142,7 @@ def _retry_download(download_fn, filename, service_name, max_retries, initial_de
 def _attempt_download(url, filename, username, api_token, service_name,
                       chunk_size, log_chunk_size,
                       current_expected_on_disk, overall_start_time,
-                      attempt, max_retries):
+                      attempt, max_retries, backup_type, backup_deleter):
     """Perform a single download attempt, handling range and streaming."""
     headers = _prepare_range_request(current_expected_on_disk, attempt, max_retries)
     
@@ -169,7 +180,8 @@ def _attempt_download(url, filename, username, api_token, service_name,
     
     return _stream_response_to_file(
         response, filename, file_open_mode, start_bytes,
-        chunk_size, log_chunk_size, service_name, overall_start_time
+        chunk_size, log_chunk_size, service_name, overall_start_time,
+        backup_type, backup_deleter
     )
 
 def _handle_range_response(response, current_expected_on_disk):
@@ -190,16 +202,28 @@ def _handle_range_response(response, current_expected_on_disk):
     # fresh download
     return 'wb', 0
 
-def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, chunk_size, log_chunk_size, service_name, overall_start_time):
-    """Stream response content to file with progress logging, return total bytes written."""
+def _stream_response_to_file(response, filename, file_open_mode, initial_bytes, chunk_size, log_chunk_size, service_name, overall_start_time, backup_type, backup_deleter):
+    """Stream response content to file with progress logging and disk space management, return total bytes written."""
     bytes_written = initial_bytes
     last_log_time = time.time()
     next_log_threshold = bytes_written + log_chunk_size
+    
+    # Set up disk space monitoring
+    file_path = Path(filename)
+    backup_directory = file_path.parent
+    minimum_free_space = chunk_size * 10  # Risk buffer: 10 times chunk size
 
     with open(filename, file_open_mode) as f:
         for chunk in response.iter_content(chunk_size=chunk_size):
             if not chunk:
                 continue
+                
+            # Check disk space before writing the chunk
+            _ensure_disk_space_available(
+                backup_directory, minimum_free_space, backup_type, 
+                backup_deleter, service_name
+            )
+            
             f.write(chunk)
             bytes_written += len(chunk)
             current_time = time.time()
@@ -249,3 +273,71 @@ def _prepare_range_request(current_expected_on_disk, attempt, max_retries):
         )
         return {'Range': f'bytes={current_expected_on_disk}-'}
     return {}
+
+def _detect_backup_type_from_filename(filename):
+    """Detect backup type (jira or confluence) from filename."""
+    filename_lower = Path(filename).name.lower()
+    if "jira" in filename_lower:
+        return "jira"
+    elif "confluence" in filename_lower:
+        return "confluence"
+    else:
+        # Default to jira if unclear
+        return "jira"
+
+def _ensure_disk_space_available(backup_directory, minimum_free_space, backup_type, backup_deleter, service_name):
+    """Ensure sufficient disk space is available, delete old backups if necessary."""
+    try:
+        # Get available disk space
+        _, _, free_bytes = shutil.disk_usage(backup_directory)
+        
+        # Check if we have enough space
+        if free_bytes >= minimum_free_space:
+            return  # Sufficient space available
+        
+        logging.warning(
+            f"Low disk space detected during {service_name} download. "
+            f"Free space: {free_bytes / (1024*1024):.1f} MB, "
+            f"Required: {minimum_free_space / (1024*1024):.1f} MB. "
+            f"Attempting to free space by deleting old {backup_type} backups."
+        )
+        
+        # Try to delete old backups to free space
+        deleted_files = 0
+        max_deletion_attempts = 5  # Prevent infinite loop
+        
+        while free_bytes < minimum_free_space and deleted_files < max_deletion_attempts:
+            # Use the backup deleter to remove one old backup
+            deleted_file = backup_deleter.delete_one_backup(backup_directory, backup_type)
+            
+            if deleted_file is None:
+                # No more files to delete
+                logging.warning(
+                    f"No more {backup_type} backup files to delete in {backup_directory}. "
+                    f"Free space: {free_bytes / (1024*1024):.1f} MB"
+                )
+                break
+            
+            deleted_files += 1
+            logging.info(f"Deleted old backup file: {deleted_file}")
+            
+            # Refresh free space after deletion
+            _, _, free_bytes = shutil.disk_usage(backup_directory)
+            
+        if free_bytes >= minimum_free_space:
+            logging.info(
+                f"Successfully freed disk space. "
+                f"Free space: {free_bytes / (1024*1024):.1f} MB, "
+                f"Deleted {deleted_files} old backup files."
+            )
+        else:
+            logging.warning(
+                f"Still insufficient disk space after deleting {deleted_files} files. "
+                f"Free space: {free_bytes / (1024*1024):.1f} MB, "
+                f"Required: {minimum_free_space / (1024*1024):.1f} MB. "
+                f"Download may fail due to insufficient disk space."
+            )
+            
+    except Exception as e:
+        logging.error(f"Error checking or managing disk space: {e}")
+        # Continue download attempt even if space management fails

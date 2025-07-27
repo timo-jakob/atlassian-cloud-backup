@@ -27,7 +27,7 @@ class BackupController:
     CONFLUENCE_BACKUP_SKIPPED_UNLICENSED_REASON = 'Confluence is unlicensed'
     CONFLUENCE_BACKUP_SKIPPED_SERVICE_UNAVAILABLE_REASON = 'Confluence service is unavailable'
 
-    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None):
+    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, deletion_strategy="oldest_first"):
         """
         Initialize backup controller with credentials.
         
@@ -37,6 +37,7 @@ class BackupController:
             api_token (str): API token for authentication
             poll_interval (int): Seconds to wait between polling requests
             backup_target_directory (str, optional): Base directory for backups.
+            deletion_strategy (str): Strategy for managing disk space when storage is low
         """
         # Store provided credentials and parameters
         self.url = url
@@ -44,6 +45,7 @@ class BackupController:
         self.api_token = api_token
         self.poll_interval = poll_interval
         self.backup_target_directory = backup_target_directory
+        self.deletion_strategy = deletion_strategy
         
         # Log the URL being used
         logging.info('Using Atlassian Cloud URL: %s', self.url)
@@ -53,8 +55,8 @@ class BackupController:
         logging.info('Backup timeout for both Jira and Confluence: %d minutes', backup_timeout_minutes)
         
         # Initialize components
-        self.jira_client = JiraClient(url, username, api_token, poll_interval, self.backup_target_directory, backup_timeout_minutes)
-        self.confluence_client = ConfluenceClient(url, username, api_token, poll_interval, True, self.backup_target_directory, backup_timeout_minutes)
+        self.jira_client = JiraClient(url, username, api_token, poll_interval, self.backup_target_directory, backup_timeout_minutes, self.deletion_strategy)
+        self.confluence_client = ConfluenceClient(url, username, api_token, poll_interval, True, self.backup_target_directory, backup_timeout_minutes, self.deletion_strategy)
         self.file_manager = FileManager(url, backup_target_directory=self.backup_target_directory)
 
         # Log the target directory for backups

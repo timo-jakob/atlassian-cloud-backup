@@ -21,7 +21,7 @@ NEW_JIRA_TRIGGERED = 'New Jira backup triggered successfully with task ID: %d'
 class JiraClient:
     """Client for handling Jira backup operations."""
     
-    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, backup_timeout_minutes=DEFAULT_TIMEOUT_MINUTES):
+    def __init__(self, url, username, api_token, poll_interval=30, backup_target_directory=None, backup_timeout_minutes=DEFAULT_TIMEOUT_MINUTES, deletion_strategy="oldest_first"):
         """
         Initialize Jira client.
         
@@ -32,6 +32,7 @@ class JiraClient:
             poll_interval (int): Seconds to wait between polling requests
             backup_target_directory (str, optional): Base directory for backups.
             backup_timeout_minutes (int, optional): Timeout in minutes for Jira backup.
+            deletion_strategy (str): Strategy for managing disk space when storage is low
         """
         self.url = url
         self.username = username
@@ -39,6 +40,7 @@ class JiraClient:
         self.poll_interval = poll_interval
         self.backup_target_directory = backup_target_directory # Store the directory
         self.backup_timeout_minutes = backup_timeout_minutes # Store the timeout
+        self.deletion_strategy = deletion_strategy # Store the deletion strategy
         
         # Log the URL being used
         logging.info('Connecting to Jira instance at %s', self.url)
@@ -401,7 +403,7 @@ class JiraClient:
         """
         download_url = self.get_download_url(task_id)
         try:
-            return download_file(download_url, filename, self.username, self.api_token, "Jira")
+            return download_file(download_url, filename, self.username, self.api_token, "Jira", deletion_strategy=self.deletion_strategy)
         except DownloadError as e:
             logging.error("Jira backup download failed for task %d: %s", task_id, e)
             raise RuntimeError(f"Failed to download Jira backup for task {task_id}") from e

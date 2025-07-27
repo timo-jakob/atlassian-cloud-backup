@@ -47,6 +47,8 @@ class TestHTTP416ErrorHandling:
     def test_attempt_download_handles_416_error(self, mock_remove, mock_exists, 
                                                 mock_stream, mock_request):
         """Test that _attempt_download handles HTTP 416 errors by deleting partial file."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         # Setup mocks
         mock_exists.return_value = True
         mock_stream.return_value = 1024
@@ -63,6 +65,10 @@ class TestHTTP416ErrorHandling:
         # First call raises 416, second call succeeds
         mock_request.side_effect = [http_416_error, mock_success_response]
         
+        # Create backup deleter instance for test
+        deletion_config = DeletionConfig()
+        backup_deleter = BackupDeleter(deletion_config)
+        
         # Execute
         result = _attempt_download(
             'http://example.com/file.zip',
@@ -75,7 +81,9 @@ class TestHTTP416ErrorHandling:
             1000,  # current_expected_on_disk > 0
             0,
             0,
-            3
+            3,
+            'jira',  # backup_type
+            backup_deleter  # backup_deleter
         )
         
         # Verify partial file was deleted
@@ -97,7 +105,7 @@ class TestHTTP416ErrorHandling:
         # Verify stream was called with correct parameters
         mock_stream.assert_called_once_with(
             mock_success_response, '/tmp/test_file.zip', 'wb', 0,
-            8192, 100*1024*1024, 'Test Service', 0
+            8192, 100*1024*1024, 'Test Service', 0, 'jira', backup_deleter
         )
         
         assert result == 1024
@@ -109,6 +117,8 @@ class TestHTTP416ErrorHandling:
     def test_attempt_download_416_no_partial_file(self, mock_remove, mock_exists,
                                                    mock_stream, mock_request):
         """Test that HTTP 416 handling works when no partial file exists."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         # Setup mocks
         mock_exists.return_value = False
         mock_stream.return_value = 1024
@@ -125,6 +135,10 @@ class TestHTTP416ErrorHandling:
         # First call raises 416, second call succeeds
         mock_request.side_effect = [http_416_error, mock_success_response]
         
+        # Create backup deleter instance for test
+        deletion_config = DeletionConfig()
+        backup_deleter = BackupDeleter(deletion_config)
+        
         # Execute
         result = _attempt_download(
             'http://example.com/file.zip',
@@ -137,7 +151,9 @@ class TestHTTP416ErrorHandling:
             1000,  # current_expected_on_disk > 0
             0,
             0,
-            3
+            3,
+            'jira',  # backup_type
+            backup_deleter  # backup_deleter
         )
         
         # Verify file existence was checked but no removal attempted
@@ -150,12 +166,18 @@ class TestHTTP416ErrorHandling:
     @patch('atlassian_cloud_backup.utils.http_utils.make_authenticated_request')
     def test_attempt_download_reraises_other_http_errors(self, mock_request):
         """Test that non-416 HTTP errors are re-raised."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         # Create HTTP 500 error response
         mock_500_response = Mock()
         mock_500_response.status_code = 500
         http_500_error = requests.exceptions.HTTPError(response=mock_500_response)
         
         mock_request.side_effect = http_500_error
+        
+        # Create backup deleter instance for test
+        deletion_config = DeletionConfig()
+        backup_deleter = BackupDeleter(deletion_config)
         
         # Execute and verify exception is re-raised
         with pytest.raises(requests.exceptions.HTTPError) as exc_info:
@@ -170,7 +192,9 @@ class TestHTTP416ErrorHandling:
                 1000,
                 0,
                 0,
-                3
+                3,
+                'jira',  # backup_type
+                backup_deleter  # backup_deleter
             )
         
         assert exc_info.value.response.status_code == 500
@@ -180,6 +204,8 @@ class TestHTTP416ErrorHandling:
     @patch('atlassian_cloud_backup.utils.http_utils._handle_range_response')
     def test_attempt_download_success_path(self, mock_handle_range, mock_stream, mock_request):
         """Test _attempt_download's success path (no exceptions)."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         # Setup mocks
         mock_response = Mock()
         mock_response.status_code = 200
@@ -187,6 +213,10 @@ class TestHTTP416ErrorHandling:
         
         mock_handle_range.return_value = ('ab', 1024)
         mock_stream.return_value = 2048
+        
+        # Create backup deleter instance for test
+        deletion_config = DeletionConfig()
+        backup_deleter = BackupDeleter(deletion_config)
         
         # Execute
         result = _attempt_download(
@@ -200,7 +230,9 @@ class TestHTTP416ErrorHandling:
             1024,  # current_expected_on_disk > 0
             0,
             0,
-            3
+            3,
+            'jira',  # backup_type
+            backup_deleter  # backup_deleter
         )
         
         # Verify normal flow was followed
@@ -445,28 +477,37 @@ class TestHTTPUtilsFunctions:
     @patch('builtins.open', new_callable=MagicMock)
     def test_stream_response_to_file(self, mock_open):
         """Test _stream_response_to_file function."""
+        from atlassian_cloud_backup.thinning.manager import BackupDeleter, DeletionConfig
+        
         mock_file = MagicMock()
         mock_open.return_value.__enter__.return_value = mock_file
         
         mock_response = Mock()
         mock_response.iter_content.return_value = [b'chunk1', b'chunk2', b'']
         
+        # Create backup deleter instance for test
+        deletion_config = DeletionConfig()
+        backup_deleter = BackupDeleter(deletion_config)
+        
         with patch('atlassian_cloud_backup.utils.http_utils._log_download_progress') as mock_log_progress:
-            # The log_chunk_size needs to be smaller than the total bytes to trigger logging
-            # We'll use chunk sizes that will trigger logging
-            total_bytes = len(b'chunk1') + len(b'chunk2')  # 12 bytes
-            log_chunk_size = 5  # Will trigger logging after 5 bytes
-            
-            bytes_written = _stream_response_to_file(
-                mock_response,
-                '/tmp/test.zip',
-                'wb',
-                0,
-                8192,
-                log_chunk_size,
-                'Test Service',
-                time.time()
-            )
+            with patch('atlassian_cloud_backup.utils.http_utils._ensure_disk_space_available') as mock_disk_space:
+                # The log_chunk_size needs to be smaller than the total bytes to trigger logging
+                # We'll use chunk sizes that will trigger logging
+                total_bytes = len(b'chunk1') + len(b'chunk2')  # 12 bytes
+                log_chunk_size = 5  # Will trigger logging after 5 bytes
+                
+                bytes_written = _stream_response_to_file(
+                    mock_response,
+                    '/tmp/test.zip',
+                    'wb',
+                    0,
+                    8192,
+                    log_chunk_size,
+                    'Test Service',
+                    time.time(),
+                    'jira',  # backup_type
+                    backup_deleter  # backup_deleter
+                )
             
             # Verify file was opened correctly
             mock_open.assert_called_once_with('/tmp/test.zip', 'wb')
