@@ -117,8 +117,9 @@ class BackupRetentionLadder(DeletionStrategy):
         for week_backups in weekly_groups.values():
             if len(week_backups) > 1:
                 # Keep the latest, add others as candidates
-                week_backups.sort(key=lambda b: b.created_at, reverse=True)
-                candidates.extend(week_backups[1:])  # All except the latest
+                # Sort a copy to avoid mutating the original list
+                sorted_backups = sorted(week_backups, key=lambda b: b.created_at, reverse=True)
+                candidates.extend(sorted_backups[1:])  # All except the latest
         
         return candidates
     
@@ -140,8 +141,9 @@ class BackupRetentionLadder(DeletionStrategy):
         for month_backups in monthly_groups.values():
             if len(month_backups) > 1:
                 # Keep the latest, add others as candidates
-                month_backups.sort(key=lambda b: b.created_at, reverse=True)
-                candidates.extend(month_backups[1:])  # All except the latest
+                # Sort a copy to avoid mutating the original list
+                sorted_backups = sorted(month_backups, key=lambda b: b.created_at, reverse=True)
+                candidates.extend(sorted_backups[1:])  # All except the latest
         
         return candidates
     
@@ -163,8 +165,9 @@ class BackupRetentionLadder(DeletionStrategy):
         for year_backups in yearly_groups.values():
             if len(year_backups) > 1:
                 # Keep the latest, add others as candidates
-                year_backups.sort(key=lambda b: b.created_at, reverse=True)
-                candidates.extend(year_backups[1:])  # All except the latest
+                # Sort a copy to avoid mutating the original list
+                sorted_backups = sorted(year_backups, key=lambda b: b.created_at, reverse=True)
+                candidates.extend(sorted_backups[1:])  # All except the latest
         
         return candidates
 

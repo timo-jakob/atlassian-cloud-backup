@@ -217,7 +217,6 @@ def test_scenario_1_three_years_daily_backups():
     assert selected_ladder.task_id == "665800"
     
     print(f"\n✅ PASSED: Both strategies correctly selected the oldest backup from {start_date.strftime('%Y-%m-%d')}")
-    return True
 
 
 def test_scenario_2_daily_backups_ending_december_2022():
@@ -278,7 +277,6 @@ def test_scenario_2_daily_backups_ending_december_2022():
     print(f"\n📌 Retention ladder preserves newest: {newest_2022.path.name} ({newest_2022.created_at.strftime('%Y-%m-%d')})")
     
     print(f"\n✅ PASSED: Both strategies correctly selected January 1, 2022")
-    return True
 
 
 def test_scenario_3_extended_with_2023_data():
@@ -358,7 +356,6 @@ def test_scenario_3_extended_with_2023_data():
     assert selected_ladder.created_at.date() == datetime(2022, 1, 1).date()
     
     print(f"\n✅ PASSED: Strategies behave as expected with multi-year data")
-    return True
 
 
 def run_all_scenarios():
