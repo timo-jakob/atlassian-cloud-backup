@@ -196,7 +196,7 @@ def test_scenario_1_three_years_daily_backups():
     oldest_strategy = OldestFirstStrategy()
     selected_oldest = oldest_strategy.select_file_for_deletion(backups)
     
-    print(f"\n🗂️  OldestFirstStrategy:")
+    print("\n🗂️  OldestFirstStrategy:")
     print(f"   Selected: {selected_oldest.path.name}")
     print(f"   Date: {selected_oldest.created_at.strftime('%Y-%m-%d')}")
     print(f"   Task ID: {selected_oldest.task_id}")
@@ -205,7 +205,7 @@ def test_scenario_1_three_years_daily_backups():
     ladder_strategy = BackupRetentionLadder()
     selected_ladder = ladder_strategy.select_file_for_deletion(backups)
     
-    print(f"\n📊 BackupRetentionLadder:")
+    print("\n📊 BackupRetentionLadder:")
     print(f"   Selected: {selected_ladder.path.name}")
     print(f"   Date: {selected_ladder.created_at.strftime('%Y-%m-%d')}")
     print(f"   Task ID: {selected_ladder.task_id}")
@@ -252,7 +252,7 @@ def test_scenario_2_daily_backups_ending_december_2022():
     oldest_strategy = OldestFirstStrategy()
     selected_oldest = oldest_strategy.select_file_for_deletion(backups)
     
-    print(f"\n🗂️  OldestFirstStrategy:")
+    print("\n🗂️  OldestFirstStrategy:")
     print(f"   Selected: {selected_oldest.path.name}")
     print(f"   Date: {selected_oldest.created_at.strftime('%Y-%m-%d')}")
     print(f"   Task ID: {selected_oldest.task_id}")
@@ -261,7 +261,7 @@ def test_scenario_2_daily_backups_ending_december_2022():
     ladder_strategy = BackupRetentionLadder()
     selected_ladder = ladder_strategy.select_file_for_deletion(backups)
     
-    print(f"\n📊 BackupRetentionLadder:")
+    print("\n📊 BackupRetentionLadder:")
     print(f"   Selected: {selected_ladder.path.name}")
     print(f"   Date: {selected_ladder.created_at.strftime('%Y-%m-%d')}")
     print(f"   Task ID: {selected_ladder.task_id}")
@@ -276,7 +276,7 @@ def test_scenario_2_daily_backups_ending_december_2022():
     newest_2022 = max(backups, key=lambda b: b.created_at)
     print(f"\n📌 Retention ladder preserves newest: {newest_2022.path.name} ({newest_2022.created_at.strftime('%Y-%m-%d')})")
     
-    print(f"\n✅ PASSED: Both strategies correctly selected January 1, 2022")
+    print("\n✅ PASSED: Both strategies correctly selected January 1, 2022")
 
 
 def test_scenario_3_extended_with_2023_data():
@@ -317,7 +317,7 @@ def test_scenario_3_extended_with_2023_data():
     backups_2022 = [b for b in backups if b.created_at.year == 2022]
     backups_2023 = [b for b in backups if b.created_at.year == 2023]
     
-    print(f"📁 Generated backups:")
+    print("📁 Generated backups:")
     print(f"   2022: {len(backups_2022)} backups (Jan 1 - Dec 31)")
     print(f"   2023: {len(backups_2023)} backups (Jan 1 - Jan 31)")
     print(f"   Total: {len(backups)} backups")
@@ -326,25 +326,25 @@ def test_scenario_3_extended_with_2023_data():
     oldest_strategy = OldestFirstStrategy()
     selected_oldest = oldest_strategy.select_file_for_deletion(backups)
     
-    print(f"\n🗂️  OldestFirstStrategy:")
+    print("\n🗂️  OldestFirstStrategy:")
     print(f"   Selected: {selected_oldest.path.name}")
     print(f"   Date: {selected_oldest.created_at.strftime('%Y-%m-%d')}")
-    print(f"   Reason: Always selects absolute oldest")
+    print("   Reason: Always selects absolute oldest")
     
     # Test BackupRetentionLadder
     ladder_strategy = BackupRetentionLadder()
     selected_ladder = ladder_strategy.select_file_for_deletion(backups)
     
-    print(f"\n📊 BackupRetentionLadder:")
+    print("\n📊 BackupRetentionLadder:")
     print(f"   Selected: {selected_ladder.path.name}")
     print(f"   Date: {selected_ladder.created_at.strftime('%Y-%m-%d')}")
-    print(f"   Reason: Oldest among candidates from yearly retention")
+    print("   Reason: Oldest among candidates from yearly retention")
     
     # Show preservation pattern
     newest_2022 = max(backups_2022, key=lambda b: b.created_at)
     newest_2023 = max(backups_2023, key=lambda b: b.created_at)
     
-    print(f"\n📌 Retention ladder would preserve:")
+    print("\n📌 Retention ladder would preserve:")
     print(f"   Newest 2022: {newest_2022.path.name} ({newest_2022.created_at.strftime('%Y-%m-%d')})")
     print(f"   Newest 2023: {newest_2023.path.name} ({newest_2023.created_at.strftime('%Y-%m-%d')})")
     
@@ -355,7 +355,7 @@ def test_scenario_3_extended_with_2023_data():
     # but oldest overall should still be selected
     assert selected_ladder.created_at.date() == datetime(2022, 1, 1).date()
     
-    print(f"\n✅ PASSED: Strategies behave as expected with multi-year data")
+    print("\n✅ PASSED: Strategies behave as expected with multi-year data")
 
 
 def run_all_scenarios():
