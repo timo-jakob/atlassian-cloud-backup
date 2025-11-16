@@ -134,8 +134,9 @@ class JiraClient:
         logging.info('Fetching Jira task info for ID %d', task_id)
         try:
             return self.jira.get(f'/rest/api/3/task/{task_id}')
-        except Exception:
+        except Exception as e:
             # Fall back to direct API call if the Jira library fails
+            logging.debug('Jira library call failed: %s. Falling back to direct API call.', str(e))
             url = f"{self.url.rstrip('/')}/rest/api/3/task/{task_id}"
             response = make_authenticated_request('GET', url, self.username, self.api_token)
             return response.json()

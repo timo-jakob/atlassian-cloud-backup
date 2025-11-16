@@ -3,18 +3,16 @@
 CLI tool to backup Atlassian Cloud instances (Jira & Confluence).
 """
 
-import os
-import sys
+import configparser
 import logging
-import click
-from datetime import datetime
-import configparser  # Added import
-from pathlib import Path  # Added import
-import select
-import termios
-
-import sys
 import os
+import select
+import sys
+import termios
+from datetime import datetime
+from pathlib import Path
+
+import click
 
 USER_INPUT_TIMEOUT_SECONDS = 3600  # 1 hour timeout for user input
 
