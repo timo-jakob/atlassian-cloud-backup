@@ -9,7 +9,6 @@ import os
 import select
 import sys
 import termios
-from datetime import datetime
 from pathlib import Path
 
 import click
